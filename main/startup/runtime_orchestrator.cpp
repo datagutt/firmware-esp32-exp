@@ -69,8 +69,9 @@ void runtime_task(void*) {
   }
 
   if (cfg.ap_mode) {
-    if (s_button_boot || !sta_connected) {
-      ESP_LOGW(TAG, "WiFi didn't connect or Boot Button Pressed");
+    bool has_wifi_creds = (strlen(cfg.ssid) > 0);
+    if (s_button_boot || (!sta_connected && !has_wifi_creds)) {
+      ESP_LOGW(TAG, "Boot button pressed or no WiFi credentials configured");
       ESP_LOGI(TAG, "Loading Config WEBP");
       if (gfx_display_asset("config")) {
         ESP_LOGE(TAG, "Failed to display config screen - continuing without it");
