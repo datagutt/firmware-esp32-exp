@@ -13,6 +13,12 @@ if(NOT DEFINED VAL_REMOTE_URL)
 endif()
 
 file(GLOB_RECURSE MAIN_SRCS "*.cpp" "*.c")
+
+# Conditionally include touch_control.c only for Tidbyt Gen2
+if(NOT CONFIG_BOARD_TIDBYT_GEN2)
+    list(REMOVE_ITEM MAIN_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/touch_control.c")
+endif()
+
 idf_component_register(SRCS ${MAIN_SRCS}
                        INCLUDE_DIRS "." "display" "webp_player" "network" "config" "system" "scheduler" "startup")
 

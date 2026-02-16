@@ -15,6 +15,9 @@
 #include "nvs_settings.h"
 #include "startup/runtime_orchestrator.h"
 #include "sdkconfig.h"
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+#include "touch_control.h"
+#endif
 #include "version.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -28,7 +31,68 @@ namespace {
 const char* TAG = "main";
 bool button_boot = false;
 
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+// Touch control state
+bool display_power_on = true;
+uint8_t saved_brightness = 30;
+
+void handle_touch_event(touch_event_t event) {
+  ESP_LOGI(TAG, "Touch event: %s", touch_event_to_string(event));
+
+  switch (event) {
+    case TOUCH_EVENT_TAP:
+      if (display_power_on) {
+        ESP_LOGI(TAG, "TAP - skip to next app");
+        gfx_interrupt();
+      } else {
+        ESP_LOGI(TAG, "TAP ignored - display is off (hold to turn on)");
+      }
+      break;
+
+    case TOUCH_EVENT_DOUBLE_TAP:
+      // Reserved for future use
+      ESP_LOGI(TAG, "DOUBLE TAP - no action assigned");
+      break;
+
+    case TOUCH_EVENT_HOLD:
+      display_power_on = !display_power_on;
+
+      if (display_power_on) {
+        ESP_LOGI(TAG, "HOLD - Display ON");
+        display_set_brightness(saved_brightness);
+        gfx_start();
+      } else {
+        ESP_LOGI(TAG, "HOLD - Display OFF");
+        saved_brightness = 30;
+        display_set_brightness(0);
+        gfx_stop();
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+void touch_task(void*) {
+  while (true) {
+    touch_event_t event = touch_control_check();
+    if (event != TOUCH_EVENT_NONE) {
+      handle_touch_event(event);
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms = responsive touch
+  }
+}
+#endif
+
 }  // namespace
+
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+void touch_on_brightness_set(uint8_t brightness) {
+  display_power_on = true;
+  saved_brightness = brightness;
+}
+#endif
 
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "App Main Start");
@@ -76,6 +140,21 @@ extern "C" void app_main(void) {
     return;
   }
   esp_register_shutdown_handler(&display_shutdown);
+
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+  // Initialize touch controls (GPIO33 on Tidbyt Gen2)
+  ESP_LOGI(TAG, "Initializing touch control...");
+  esp_err_t touch_ret = touch_control_init();
+  if (touch_ret == ESP_OK) {
+    ESP_LOGI(TAG, "Touch control ready on GPIO33");
+    touch_control_debug_all_pads();
+
+    xTaskCreate(touch_task, "touch_poll", 2048, nullptr, 2, nullptr);
+  } else {
+    ESP_LOGW(TAG, "Touch control init failed: %s (continuing without touch)",
+             esp_err_to_name(touch_ret));
+  }
+#endif
 
   if (cfg.ap_mode) {
     ESP_LOGI(TAG, "Starting AP Web Server...");

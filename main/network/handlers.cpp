@@ -12,6 +12,9 @@
 #include <freertos/task.h>
 
 #include "display.h"
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+extern void touch_on_brightness_set(uint8_t brightness);
+#endif
 #include "api_validation.h"
 #include "diag_event_ring.h"
 #include "messages.h"
@@ -208,6 +211,10 @@ void process_text_message(const char* json_str) {
   if (has_brightness) {
     display_set_brightness(static_cast<uint8_t>(brightness_value));
     ESP_LOGI(TAG, "Updated brightness to %d", brightness_value);
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+    // Sync touch control state - server brightness command means display is on
+    touch_on_brightness_set(static_cast<uint8_t>(brightness_value));
+#endif
   }
 
   if (has_ota_url) {
