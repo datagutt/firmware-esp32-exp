@@ -1,0 +1,29 @@
+main/main.c
+  8a4293785ccc4729 23,518-520
+main/CMakeLists.txt
+  8a4293785ccc4729 27
+main/sta_api.c
+  8a4293785ccc4729 1-105
+main/sta_api.h
+  8a4293785ccc4729 1-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "6d1274b2122cee9eb913545de268b122d09990ec",
+  "prompts": {
+    "8a4293785ccc4729": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b0b4748-3571-4569-90ca-488e028a55e6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 127,
+      "total_deletions": 0,
+      "accepted_lines": 127,
+      "overriden_lines": 0
+    }
+  }
+}
