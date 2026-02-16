@@ -1,0 +1,31 @@
+main/sta_api.h
+  ec41194234837a03 4-5,17-18
+main/ap.h
+  ec41194234837a03 34,36-37,39
+main/ap.c
+  ec41194234837a03 16,313-316,325,341-345,348-354
+main/sta_api.c
+  ec41194234837a03 123-125
+main/main.c
+  ec41194234837a03 523-528
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "68e14d3a89210114a4ccae5cad4fb290b2168e57",
+  "prompts": {
+    "ec41194234837a03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "07523d1c-6240-4c5d-b3a5-c7f4d45ba16e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 38,
+      "total_deletions": 20,
+      "accepted_lines": 37,
+      "overriden_lines": 0
+    }
+  }
+}
