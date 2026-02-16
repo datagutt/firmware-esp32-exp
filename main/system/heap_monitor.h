@@ -14,6 +14,14 @@ typedef struct {
     size_t dma_free;
 } heap_snapshot_t;
 
+typedef struct {
+    uint32_t uptime_ms;
+    size_t internal_free;
+    size_t internal_min;
+    size_t spiram_free;
+    size_t spiram_min;
+} heap_trend_point_t;
+
 /** Initialize heap monitoring and record baseline. Call early in app_main. */
 void heap_monitor_init(void);
 
@@ -28,6 +36,12 @@ void heap_monitor_check_since_checkpoint(const char* label);
 
 /** Fill snapshot with current heap state. */
 void heap_monitor_get_snapshot(heap_snapshot_t* snapshot);
+
+/** Capture the current heap values into the trend ring. */
+void heap_monitor_capture_sample(void);
+
+/** Return recent heap trend points (newest first). */
+size_t heap_monitor_get_trend(heap_trend_point_t* out, size_t max_points);
 
 /** Run heap integrity check; returns true if OK. */
 bool heap_monitor_check_integrity(const char* location);
