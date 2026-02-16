@@ -33,12 +33,11 @@ int display_initialize(void) {
   if (_scaled_buffer == NULL) {
     constexpr size_t kScaledBufferBytes = 128 * 64 * sizeof(uint32_t);
     _scaled_buffer = static_cast<uint32_t*>(heap_caps_malloc(
-        kScaledBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    _scaled_buffer_in_psram = false;
+        kScaledBufferBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    _scaled_buffer_in_psram = (_scaled_buffer != NULL);
     if (_scaled_buffer == NULL) {
       _scaled_buffer = static_cast<uint32_t*>(heap_caps_malloc(
-          kScaledBufferBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-      _scaled_buffer_in_psram = (_scaled_buffer != NULL);
+          kScaledBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     }
     if (_scaled_buffer == NULL) {
       ESP_LOGE(TAG, "Failed to allocate scaled 128x64 buffer");
