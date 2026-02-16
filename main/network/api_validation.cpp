@@ -16,8 +16,18 @@ bool is_allowed_key(const char* key, const char* const* allowed_keys,
   return false;
 }
 
-void set_err(char* err, size_t err_len, const char* fmt, const char* key,
-             long min_v, long max_v) {
+void set_err(char* err, size_t err_len, const char* text) {
+  if (!err || err_len == 0 || !text) return;
+  snprintf(err, err_len, "%s", text);
+}
+
+void set_err_key(char* err, size_t err_len, const char* fmt, const char* key) {
+  if (!err || err_len == 0 || !fmt) return;
+  snprintf(err, err_len, fmt, key);
+}
+
+void set_err_range(char* err, size_t err_len, const char* fmt, const char* key,
+                   long min_v, long max_v) {
   if (!err || err_len == 0 || !fmt) return;
   snprintf(err, err_len, fmt, key, min_v, max_v);
 }
@@ -29,14 +39,14 @@ bool api_validate_no_unknown_keys(const cJSON* root,
                                   size_t allowed_len, char* err,
                                   size_t err_len) {
   if (!root || !cJSON_IsObject(root)) {
-    set_err(err, err_len, "payload is not a JSON object", "", 0, 0);
+    set_err(err, err_len, "payload is not a JSON object");
     return false;
   }
 
   cJSON* item = nullptr;
   cJSON_ArrayForEach(item, root) {
     if (!is_allowed_key(item->string, allowed_keys, allowed_len)) {
-      set_err(err, err_len, "unsupported field: %s", item->string, 0, 0);
+      set_err_key(err, err_len, "unsupported field: %s", item->string);
       return false;
     }
   }
@@ -55,14 +65,14 @@ bool api_validate_optional_int(const cJSON* root, const char* key, int min_val,
 
   if (out_present) *out_present = true;
   if (!cJSON_IsNumber(item)) {
-    set_err(err, err_len, "%s must be a number", key, 0, 0);
+    set_err_key(err, err_len, "%s must be a number", key);
     return false;
   }
 
   int value = item->valueint;
   if (value < min_val || value > max_val) {
-    set_err(err, err_len, "%s out of range [%ld, %ld]", key, min_val,
-            max_val);
+    set_err_range(err, err_len, "%s out of range [%ld, %ld]", key, min_val,
+                  max_val);
     return false;
   }
 
@@ -84,7 +94,7 @@ bool api_validate_optional_bool(const cJSON* root, const char* key,
 
   if (out_present) *out_present = true;
   if (!cJSON_IsBool(item)) {
-    set_err(err, err_len, "%s must be a boolean", key, 0, 0);
+    set_err_key(err, err_len, "%s must be a boolean", key);
     return false;
   }
 
@@ -107,14 +117,14 @@ bool api_validate_optional_string(const cJSON* root, const char* key,
 
   if (out_present) *out_present = true;
   if (!cJSON_IsString(item) || !item->valuestring) {
-    set_err(err, err_len, "%s must be a string", key, 0, 0);
+    set_err_key(err, err_len, "%s must be a string", key);
     return false;
   }
 
   size_t len = strlen(item->valuestring);
   if (len < min_len || len > max_len) {
-    set_err(err, err_len, "%s length out of range [%ld, %ld]", key,
-            static_cast<long>(min_len), static_cast<long>(max_len));
+    set_err_range(err, err_len, "%s length out of range [%ld, %ld]", key,
+                  static_cast<long>(min_len), static_cast<long>(max_len));
     return false;
   }
 
