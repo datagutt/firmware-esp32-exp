@@ -73,7 +73,7 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "Connected to AP, creating IPv6 link local address");
         esp_netif_create_ip6_linklocal(s_sta_netif);
         break;
-      case WIFI_EVENT_STA_DISCONNECTED:
+      case WIFI_EVENT_STA_DISCONNECTED: {
         s_reconnect_attempts++;
         s_disconnect_events++;
         xEventGroupClearBits(s_wifi_event_group,
@@ -109,6 +109,7 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
           esp_wifi_connect();
         }
         break;
+      }
       case WIFI_EVENT_AP_STACONNECTED: {
         auto* event =
             static_cast<wifi_event_ap_staconnected_t*>(event_data);
