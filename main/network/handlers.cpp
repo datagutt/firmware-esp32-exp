@@ -37,6 +37,8 @@ struct TextMsg {
   size_t len;
 };
 
+void consumer_task(void*);
+
 int32_t s_dwell_secs = DEFAULT_REFRESH_INTERVAL;
 uint8_t* s_webp = nullptr;
 size_t s_ws_accumulated_len = 0;
@@ -47,6 +49,32 @@ TaskHandle_t s_consumer_task = nullptr;
 SemaphoreHandle_t s_text_mutex = nullptr;
 TextMsg s_pending_text = {nullptr, 0};
 uint32_t s_text_replace_count = 0;
+
+bool ensure_text_mailbox_initialized() {
+  if (s_text_mutex && s_consumer_task) {
+    return true;
+  }
+
+  if (!s_text_mutex) {
+    s_text_mutex = xSemaphoreCreateMutex();
+    if (!s_text_mutex) {
+      ESP_LOGE(TAG, "Failed to create text mailbox mutex");
+      return false;
+    }
+  }
+
+  if (!s_consumer_task) {
+    BaseType_t rc = xTaskCreate(consumer_task, "txt_handler",
+                                CONSUMER_STACK_SIZE, nullptr,
+                                CONSUMER_PRIORITY, &s_consumer_task);
+    if (rc != pdPASS) {
+      ESP_LOGE(TAG, "Failed to create text mailbox consumer task");
+      return false;
+    }
+  }
+
+  return true;
+}
 
 void ota_task_entry(void* param) {
   auto* url = static_cast<char*>(param);
@@ -219,17 +247,9 @@ void consumer_task(void*) {
 }  // namespace
 
 void handlers_init() {
-  if (s_consumer_task) return;
-
-  s_text_mutex = xSemaphoreCreateMutex();
-  if (!s_text_mutex) {
-    ESP_LOGE("handlers", "Failed to create text mailbox mutex");
-    return;
+  if (ensure_text_mailbox_initialized()) {
+    ESP_LOGI("handlers", "Text message mailbox initialized");
   }
-
-  xTaskCreate(consumer_task, "txt_handler", CONSUMER_STACK_SIZE, nullptr,
-              CONSUMER_PRIORITY, &s_consumer_task);
-  ESP_LOGI("handlers", "Text message mailbox initialized");
 }
 
 void handlers_deinit() {
@@ -249,6 +269,7 @@ void handlers_deinit() {
     vSemaphoreDelete(s_text_mutex);
     s_text_mutex = nullptr;
   }
+  s_text_replace_count = 0;
 }
 
 void handle_text_message(esp_websocket_event_data_t* data) {
@@ -256,7 +277,7 @@ void handle_text_message(esp_websocket_event_data_t* data) {
       (data->payload_offset + data->data_len >= data->payload_len);
   if (!is_complete) return;
 
-  if (!s_text_mutex || !s_consumer_task) {
+  if (!ensure_text_mailbox_initialized()) {
     ESP_LOGW("handlers", "Text mailbox not initialized, dropping text message");
     return;
   }
