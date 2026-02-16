@@ -221,7 +221,7 @@ void send_displaying_notification(int counter) {
   if (len > 0 && static_cast<size_t>(len) < sizeof(message)) {
     esp_websocket_client_send_text(ctx.ws_handle, message, len,
                                    portMAX_DELAY);
-    ESP_LOGD(TAG, "Sent displaying notification: %s", message);
+    ESP_LOGD(TAG, "WS send: %s", message);
   }
 }
 
@@ -236,7 +236,7 @@ void send_queued_notification(int counter) {
   if (len > 0 && static_cast<size_t>(len) < sizeof(message)) {
     esp_websocket_client_send_text(ctx.ws_handle, message, len,
                                    portMAX_DELAY);
-    ESP_LOGD(TAG, "Sent queued notification: %s", message);
+    ESP_LOGD(TAG, "WS Send: %s", message);
   }
 }
 
@@ -527,6 +527,9 @@ void player_task(void*) {
   ESP_LOGD(TAG, "Player task started on core %d", xPortGetCoreID());
 
   while (true) {
+    UBaseType_t stack_free = uxTaskGetStackHighWaterMark(NULL);
+    ESP_LOGI(TAG, "Stack remaining: %u bytes", stack_free);
+
     State state = ctx.state.load();
 
     // --- IDLE: block until command ---
