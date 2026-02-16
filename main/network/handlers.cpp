@@ -7,7 +7,7 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #include "display.h"
@@ -29,7 +29,6 @@ constexpr int DEFAULT_REFRESH_INTERVAL = 10;
 constexpr int DEFAULT_REFRESH_INTERVAL = CONFIG_REFRESH_INTERVAL_SECONDS;
 #endif
 
-constexpr int TEXT_QUEUE_DEPTH = 8;
 constexpr int CONSUMER_STACK_SIZE = 6144;
 constexpr int CONSUMER_PRIORITY = 4;
 
@@ -44,8 +43,10 @@ size_t s_ws_accumulated_len = 0;
 bool s_oversize_detected = false;
 bool s_first_image_received = false;
 
-QueueHandle_t s_text_queue = nullptr;
 TaskHandle_t s_consumer_task = nullptr;
+SemaphoreHandle_t s_text_mutex = nullptr;
+TextMsg s_pending_text = {nullptr, 0};
+uint32_t s_text_replace_count = 0;
 
 void ota_task_entry(void* param) {
   auto* url = static_cast<char*>(param);
@@ -195,9 +196,20 @@ void process_text_message(const char* json_str) {
 }
 
 void consumer_task(void*) {
-  TextMsg msg;
   while (true) {
-    if (xQueueReceive(s_text_queue, &msg, portMAX_DELAY) == pdTRUE) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    while (true) {
+      TextMsg msg = {nullptr, 0};
+      if (!s_text_mutex) break;
+      if (xSemaphoreTake(s_text_mutex, portMAX_DELAY) != pdTRUE) break;
+      if (s_pending_text.data) {
+        msg = s_pending_text;
+        s_pending_text = {nullptr, 0};
+      }
+      xSemaphoreGive(s_text_mutex);
+
+      if (!msg.data) break;
       process_text_message(msg.data);
       free(msg.data);
     }
@@ -207,12 +219,17 @@ void consumer_task(void*) {
 }  // namespace
 
 void handlers_init() {
-  if (s_text_queue) return;
+  if (s_consumer_task) return;
 
-  s_text_queue = xQueueCreate(TEXT_QUEUE_DEPTH, sizeof(TextMsg));
+  s_text_mutex = xSemaphoreCreateMutex();
+  if (!s_text_mutex) {
+    ESP_LOGE("handlers", "Failed to create text mailbox mutex");
+    return;
+  }
+
   xTaskCreate(consumer_task, "txt_handler", CONSUMER_STACK_SIZE, nullptr,
               CONSUMER_PRIORITY, &s_consumer_task);
-  ESP_LOGI("handlers", "Text message queue initialized");
+  ESP_LOGI("handlers", "Text message mailbox initialized");
 }
 
 void handlers_deinit() {
@@ -221,13 +238,16 @@ void handlers_deinit() {
     s_consumer_task = nullptr;
   }
 
-  if (s_text_queue) {
-    TextMsg msg;
-    while (xQueueReceive(s_text_queue, &msg, 0) == pdTRUE) {
-      free(msg.data);
+  if (s_text_mutex) {
+    if (xSemaphoreTake(s_text_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      if (s_pending_text.data) {
+        free(s_pending_text.data);
+        s_pending_text = {nullptr, 0};
+      }
+      xSemaphoreGive(s_text_mutex);
     }
-    vQueueDelete(s_text_queue);
-    s_text_queue = nullptr;
+    vSemaphoreDelete(s_text_mutex);
+    s_text_mutex = nullptr;
   }
 }
 
@@ -236,8 +256,8 @@ void handle_text_message(esp_websocket_event_data_t* data) {
       (data->payload_offset + data->data_len >= data->payload_len);
   if (!is_complete) return;
 
-  if (!s_text_queue) {
-    ESP_LOGW("handlers", "Queue not initialized, dropping text message");
+  if (!s_text_mutex || !s_consumer_task) {
+    ESP_LOGW("handlers", "Text mailbox not initialized, dropping text message");
     return;
   }
 
@@ -250,20 +270,25 @@ void handle_text_message(esp_websocket_event_data_t* data) {
   buf[data->data_len] = '\0';
 
   TextMsg msg = {buf, static_cast<size_t>(data->data_len)};
-  if (xQueueSend(s_text_queue, &msg, 0) != pdTRUE) {
-    // Keep latest control messages under burst: drop oldest and retry once.
-    TextMsg dropped{};
-    if (xQueueReceive(s_text_queue, &dropped, 0) == pdTRUE) {
-      free(dropped.data);
-      if (xQueueSend(s_text_queue, &msg, 0) == pdTRUE) {
-        ESP_LOGW("handlers",
-                 "Text queue full, dropped oldest message to keep latest");
-        return;
-      }
-    }
-    ESP_LOGW("handlers", "Text queue full, dropping newest message");
+  if (xSemaphoreTake(s_text_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    ESP_LOGW("handlers", "Text mailbox busy, dropping newest message");
     free(buf);
+    return;
   }
+
+  if (s_pending_text.data) {
+    free(s_pending_text.data);
+    s_text_replace_count++;
+    if ((s_text_replace_count % 20) == 1) {
+      ESP_LOGW("handlers",
+               "Text message burst: replaced older pending messages (%" PRIu32
+               " replacements)",
+               s_text_replace_count);
+    }
+  }
+  s_pending_text = msg;
+  xSemaphoreGive(s_text_mutex);
+  xTaskNotifyGive(s_consumer_task);
 }
 
 void handle_binary_message(esp_websocket_event_data_t* data) {
