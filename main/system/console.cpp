@@ -14,7 +14,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#if SOC_USB_SERIAL_JTAG_SUPPORTED
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 #include <driver/usb_serial_jtag.h>
 #include <driver/usb_serial_jtag_vfs.h>
 #endif
@@ -162,11 +162,6 @@ void register_commands() {
 }  // namespace
 
 void console_init(void) {
-#if SOC_USB_SERIAL_JTAG_SUPPORTED
-  if (!usb_serial_jtag_is_connected()) {
-    return;
-  }
-
   esp_console_repl_t* repl = nullptr;
   esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
   repl_config.prompt = "tty>";
@@ -174,6 +169,18 @@ void console_init(void) {
   register_commands();
 
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+  // USB host may not have enumerated yet at boot — retry briefly.
+  bool connected = false;
+  for (int i = 0; i < 10; i++) {
+    if (usb_serial_jtag_is_connected()) {
+      connected = true;
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+  if (!connected) {
+    return;
+  }
   esp_console_dev_usb_serial_jtag_config_t hw_config =
       ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
   ESP_ERROR_CHECK(
@@ -185,7 +192,6 @@ void console_init(void) {
       esp_console_new_repl_uart(&hw_config, &repl_config, &repl));
 #endif
   ESP_ERROR_CHECK(esp_console_start_repl(repl));
-#endif
 }
 
 #else  // !CONFIG_ENABLE_CONSOLE
