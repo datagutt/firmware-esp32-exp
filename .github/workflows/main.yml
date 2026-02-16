@@ -46,7 +46,7 @@ jobs:
             components/assets
 
       - name: Host Tests
-        run: test/host/run_tests.sh
+        run: bash test/host/run_tests.sh
 
   build:
     name: Build ${{ matrix.target }}
