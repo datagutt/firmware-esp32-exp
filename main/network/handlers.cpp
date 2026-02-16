@@ -305,7 +305,7 @@ void process_text_message(const char* json_str) {
   if (cJSON_IsBool(reboot_item) && cJSON_IsTrue(reboot_item)) {
     ESP_LOGI(TAG, "Reboot command received via WS");
     cJSON_Delete(root);
-    esp_restart();
+    gfx_safe_restart();
   }
 
   cJSON_Delete(root);

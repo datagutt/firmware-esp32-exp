@@ -826,6 +826,14 @@ void gfx_start(void) {
 
 void gfx_shutdown(void) { display_shutdown(); }
 
+void gfx_safe_restart(void) {
+  gfx_stop();
+  gfx_wait_idle();
+  gfx_shutdown();
+  vTaskDelay(pdMS_TO_TICKS(500));
+  esp_restart();
+}
+
 void gfx_interrupt(void) {
   ctx.interrupt_request.store(InterruptRequest::STOP_ONLY,
                               std::memory_order_release);

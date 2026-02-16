@@ -17,6 +17,7 @@
 
 #include "http_server.h"
 #include "nvs_settings.h"
+#include "webp_player.h"
 #include "wifi.h"
 
 namespace {
@@ -420,9 +421,8 @@ esp_err_t save_handler(httpd_req_t* req) {
   httpd_resp_set_type(req, "text/html");
   httpd_resp_send(req, s_success_html, strlen(s_success_html));
 
-  ESP_LOGI(TAG, "Configuration saved - rebooting in 1 second...");
-  vTaskDelay(pdMS_TO_TICKS(1000));
-  esp_restart();
+  ESP_LOGI(TAG, "Configuration saved - rebooting...");
+  gfx_safe_restart();
 
   return ESP_OK;
 }
@@ -553,9 +553,7 @@ esp_err_t update_handler(httpd_req_t* req) {
 
   ESP_LOGI(TAG, "OTA Success! Rebooting...");
   httpd_resp_send(req, "OK", 2);
-
-  vTaskDelay(pdMS_TO_TICKS(1000));
-  esp_restart();
+  gfx_safe_restart();
 
   return ESP_OK;
 }

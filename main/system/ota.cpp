@@ -244,11 +244,7 @@ void run_ota(const char* url) {
     if (err == ESP_OK) {
       ESP_LOGI(TAG, "OTA Update successful. Rebooting...");
       diag_event_log("INFO", "ota_success", 0, "OTA update successful");
-      display_clear();
-      display_text("Rebooting", 2, 10, 0, 255, 0, 1);
-      display_flip();
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      esp_restart();
+      gfx_safe_restart();
     } else {
       ESP_LOGE(TAG, "OTA Finish failed: %s", esp_err_to_name(err));
       diag_event_log("ERROR", "ota_finish_fail", err, esp_err_to_name(err));

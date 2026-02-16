@@ -101,6 +101,9 @@ void gfx_preempt(void);
 /** Block until the gfx task finishes the current animation. */
 void gfx_wait_idle(void);
 
+/** Cleanly stop playback, tear down display, then restart. */
+void gfx_safe_restart(void);
+
 //------------------------------------------------------------------------------
 // Status Query
 //------------------------------------------------------------------------------
