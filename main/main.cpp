@@ -45,15 +45,13 @@ void config_saved_callback() {
 void runtime_coordinator_task(void*) {
   auto cfg = config_get();
 
-  vTaskDelay(pdMS_TO_TICKS(1000));
-
   uint8_t mac[6];
   if (!wifi_get_mac(mac)) {
     ESP_LOGI(TAG, "WiFi MAC: %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1],
              mac[2], mac[3], mac[4], mac[5]);
   }
 
-  bool sta_connected = wifi_wait_for_connection(60000);
+  bool sta_connected = wifi_is_connected();
 
   if (sta_connected) {
     ESP_LOGI(TAG, "WiFi connected successfully!");
@@ -68,16 +66,18 @@ void runtime_coordinator_task(void*) {
                  "connection (IPv4)");
       }
     }
-
-    ntp_init();
-
-    auto syslog_cfg = config_get();
-    if (strlen(syslog_cfg.syslog_addr) > 0) {
-      syslog_init(syslog_cfg.syslog_addr);
-    }
-
-    sta_api_start();
+  } else {
+    ESP_LOGW(TAG, "WiFi not yet connected - continuing with event-driven startup");
   }
+
+  ntp_init();
+
+  auto syslog_cfg = config_get();
+  if (strlen(syslog_cfg.syslog_addr) > 0) {
+    syslog_init(syslog_cfg.syslog_addr);
+  }
+
+  sta_api_start();
 
   if (cfg.ap_mode) {
     ap_register_wildcard();
@@ -120,14 +120,6 @@ void runtime_coordinator_task(void*) {
         config_wait_counter++;
         vTaskDelay(pdMS_TO_TICKS(1000));
       }
-    }
-  } else if (!wifi_is_connected()) {
-    ESP_LOGW(TAG, "Pausing runtime task until wifi connected...");
-    int counter = 0;
-    while (!wifi_is_connected()) {
-      counter++;
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      if (counter > 600) esp_restart();
     }
   }
 
