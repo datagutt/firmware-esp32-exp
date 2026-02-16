@@ -31,6 +31,7 @@ const char* TAG = "sockets";
 
 constexpr int64_t RECONNECT_DELAY_US = 5000 * 1000;  // 5 seconds
 constexpr int64_t INITIAL_CONNECT_DELAY_US = 500 * 1000;  // 0.5 seconds
+constexpr int64_t GOT_IP_CONNECT_DELAY_US = 1500 * 1000;  // 1.5 seconds
 constexpr int64_t HEALTH_CHECK_INTERVAL_US = 30000 * 1000;  // 30 seconds
 
 // ---------------------------------------------------------------------------
@@ -214,7 +215,13 @@ void wifi_event_handler(void*, esp_event_base_t base, int32_t id, void*) {
     ESP_LOGI(TAG, "Got IP, state=%d", static_cast<int>(ctx.state));
     if (ctx.state == State::Disconnected) {
       ctx.state = State::Ready;
-      start_client();
+      // Avoid first TLS handshake during peak startup activity.
+      if (reconnect_timer) {
+        esp_timer_stop(reconnect_timer);
+        esp_timer_start_once(reconnect_timer, GOT_IP_CONNECT_DELAY_US);
+      } else {
+        start_client();
+      }
     }
   }
 }
