@@ -1,0 +1,31 @@
+main/touch_control.h
+  b412a1ebbd56d312 1-59
+main/main.cpp
+  b412a1ebbd56d312 18-21,31-70,72-87,90-95,144-158,163-165
+main/CMakeLists.txt
+  b412a1ebbd56d312 16-21
+main/touch_control.c
+  b412a1ebbd56d312 1-305
+main/network/handlers.cpp
+  b412a1ebbd56d312 15-17,214-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "087f7ffbc861ea1b477296e60fe8f6645a7f372f",
+  "prompts": {
+    "b412a1ebbd56d312": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "45543a1b-5a2b-43ee-a710-367636e29f91",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 495,
+      "total_deletions": 39,
+      "accepted_lines": 465,
+      "overriden_lines": 0
+    }
+  }
+}
