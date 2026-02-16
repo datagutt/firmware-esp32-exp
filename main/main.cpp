@@ -8,6 +8,7 @@
 #include "ap.h"
 #include "console.h"
 #include "display.h"
+#include "diag_event_ring.h"
 #include "heap_monitor.h"
 #include "http_server.h"
 #include "mdns_service.h"
@@ -64,6 +65,7 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Check for button press");
 
   ESP_ERROR_CHECK(nvs_settings_init());
+  diag_event_ring_init();
   console_init();
   heap_monitor_init();
 
