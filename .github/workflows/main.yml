@@ -46,6 +46,11 @@ jobs:
             main \
             components/assets
 
+      - name: Fetch Managed Components
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tronbyt-s3" set-target esp32s3 reconfigure
+
       - name: Host Tests
         run: bash test/host/run_tests.sh
 
