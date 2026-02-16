@@ -192,7 +192,7 @@ This project is a modernized rewrite of the [original Tronbyt firmware](https://
 | | Original Firmware | This Project |
 | :--- | :--- | :--- |
 | **Display** | `ESP32-HUB75-MatrixPanel-DMA` | `esp-hub75` (datagutt/esp-hub75) |
-| **WebP** | `tronbyt/libwebp` | `datagutt/libwebp` |
+| **WebP** | `tronbyt/libwebp` | `datagutt/libwebp` (with Xtensa PIE) |
 | **WebSocket** | `esp_websocket_client` 1.6.0 | `esp_websocket_client` 1.6.1 |
 | **JSON** | — | `espressif/cjson` |
 | **mDNS** | — | `espressif/mdns` |
