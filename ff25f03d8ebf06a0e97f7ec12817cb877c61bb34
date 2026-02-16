@@ -1,0 +1,44 @@
+main/raii_utils.hpp
+  56c877c7be6bf528 1-66
+main/config/nvs_settings.cpp
+  56c877c7be6bf528 1-345
+main/network/sta_api.cpp
+  56c877c7be6bf528 15,17-21,40-45,61,71-72,126,132
+main/system/heap_monitor.cpp
+  56c877c7be6bf528 1-133
+main/CMakeLists.txt
+  56c877c7be6bf528 15-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "ff25f03d8ebf06a0e97f7ec12817cb877c61bb34",
+  "prompts": {
+    "56c877c7be6bf528": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b03ab5e1-900e-43af-9656-2a1a91b0ab48",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 680,
+      "total_deletions": 14,
+      "accepted_lines": 680,
+      "overriden_lines": 0
+    },
+    "8a4293785ccc4729": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b0b4748-3571-4569-90ca-488e028a55e6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 203,
+      "overriden_lines": 0
+    }
+  }
+}
