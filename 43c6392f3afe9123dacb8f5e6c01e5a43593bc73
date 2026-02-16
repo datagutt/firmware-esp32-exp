@@ -1,0 +1,35 @@
+main/main.cpp
+  56c877c7be6bf528 21,202-207
+main/network/handlers.h
+  56c877c7be6bf528 1-9
+main/network/messages.cpp
+  56c877c7be6bf528 1-93
+main/network/sockets.h
+  56c877c7be6bf528 1-17
+main/network/messages.h
+  56c877c7be6bf528 1-10
+main/network/sockets.cpp
+  56c877c7be6bf528 1-298
+main/network/handlers.cpp
+  56c877c7be6bf528 1-262
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "43c6392f3afe9123dacb8f5e6c01e5a43593bc73",
+  "prompts": {
+    "56c877c7be6bf528": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b03ab5e1-900e-43af-9656-2a1a91b0ab48",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 696,
+      "total_deletions": 3,
+      "accepted_lines": 696,
+      "overriden_lines": 0
+    }
+  }
+}
