@@ -1,0 +1,31 @@
+main/network/wifi.cpp
+  56c877c7be6bf528 1-365
+main/system/syslog.cpp
+  56c877c7be6bf528 1-202
+main/network/remote.cpp
+  56c877c7be6bf528 1-257
+main/system/sntp.cpp
+  56c877c7be6bf528 1-33
+main/system/ota.cpp
+  56c877c7be6bf528 1-347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "dbeae4df96b6f7c26b91ecc831ec767473d1b87f",
+  "prompts": {
+    "56c877c7be6bf528": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b03ab5e1-900e-43af-9656-2a1a91b0ab48",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 1204,
+      "total_deletions": 0,
+      "accepted_lines": 1204,
+      "overriden_lines": 0
+    }
+  }
+}
