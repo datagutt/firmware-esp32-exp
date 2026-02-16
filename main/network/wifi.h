@@ -65,6 +65,16 @@ bool wifi_wait_for_ipv6(uint32_t timeout_ms);
  */
 bool wifi_is_connected(void);
 
+typedef struct {
+  bool connected;
+  bool connection_given_up;
+  int reconnect_attempts;
+  uint32_t disconnect_events;
+  uint32_t health_disconnect_checks;
+} wifi_diag_stats_t;
+
+void wifi_get_diag_stats(wifi_diag_stats_t* out);
+
 // Add new function to register config callback
 void wifi_register_config_callback(void (*callback)(void));
 

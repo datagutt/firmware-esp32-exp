@@ -12,6 +12,7 @@
 #include <esp_partition.h>
 #include <esp_random.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <esp_wifi_types.h>
 #include <freertos/FreeRTOS.h>
@@ -26,6 +27,7 @@
 #include <nvs_flash.h>
 
 #include "ap.h"
+#include "diag_event_ring.h"
 #include "nvs_settings.h"
 
 namespace {
@@ -46,6 +48,10 @@ void (*s_config_callback)(void) = nullptr;
 int s_reconnect_attempts = 0;
 bool s_connection_given_up = false;
 int s_wifi_disconnect_counter = 0;
+uint32_t s_disconnect_events = 0;
+uint32_t s_disconnect_streak = 0;
+int64_t s_disconnect_window_start_us = 0;
+uint32_t s_health_disconnect_checks = 0;
 
 void handle_successful_ip_acquisition() {
   s_reconnect_attempts = 0;
@@ -69,9 +75,25 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
         break;
       case WIFI_EVENT_STA_DISCONNECTED:
         s_reconnect_attempts++;
+        s_disconnect_events++;
         xEventGroupClearBits(s_wifi_event_group,
                              WIFI_CONNECTED_BIT | WIFI_CONNECTED_IPV6_BIT);
         xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+
+        int64_t now_us = esp_timer_get_time();
+        if ((now_us - s_disconnect_window_start_us) > 60000000LL) {
+          s_disconnect_window_start_us = now_us;
+          s_disconnect_streak = 0;
+        }
+        s_disconnect_streak++;
+
+        diag_event_log("WARN", "wifi_disconnect", s_reconnect_attempts,
+                       "Station disconnected");
+        if (s_disconnect_streak >= 5) {
+          diag_event_log("ERROR", "wifi_disconnect_storm",
+                         static_cast<int32_t>(s_disconnect_streak),
+                         "Repeated disconnects in 60s window");
+        }
 
         if (config_get().ap_mode &&
             s_reconnect_attempts >= MAX_RECONNECT_ATTEMPTS &&
@@ -328,12 +350,15 @@ void wifi_health_check(void) {
   }
 
   s_wifi_disconnect_counter++;
+  s_health_disconnect_checks++;
   ESP_LOGW(TAG, "WiFi Health check. Disconnect count: %d",
            s_wifi_disconnect_counter);
 
   if (s_wifi_disconnect_counter >= 10) {
     ESP_LOGE(TAG, "WiFi disconnect count reached %d - rebooting",
              s_wifi_disconnect_counter);
+    diag_event_log("ERROR", "wifi_health_reboot", s_wifi_disconnect_counter,
+                   "WiFi health check forced reboot");
     esp_restart();
   }
 
@@ -347,6 +372,15 @@ void wifi_health_check(void) {
   } else {
     ESP_LOGW(TAG, "No SSID configured, cannot reconnect");
   }
+}
+
+void wifi_get_diag_stats(wifi_diag_stats_t* out) {
+  if (!out) return;
+  out->connected = wifi_is_connected();
+  out->connection_given_up = s_connection_given_up;
+  out->reconnect_attempts = s_reconnect_attempts;
+  out->disconnect_events = s_disconnect_events;
+  out->health_disconnect_checks = s_health_disconnect_checks;
 }
 
 void wifi_apply_power_save(void) {
