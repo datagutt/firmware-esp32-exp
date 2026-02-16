@@ -13,12 +13,12 @@
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <http_parser.h>
 #include <lwip/netdb.h>
 #include <lwip/sockets.h>
 
 #include "display.h"
 #include "diag_event_ring.h"
+#include "ota_url_utils.h"
 #include "webp_player.h"
 
 namespace {
@@ -43,49 +43,21 @@ bool is_ip_private(const struct sockaddr* addr) {
   return false;
 }
 
-bool check_url_protocol(const char* url, size_t url_len,
-                        const struct http_parser_url* u, char* out_url,
-                        size_t out_len) {
-  if (u->field_set & (1 << UF_SCHEMA)) {
-    const char* schema = url + u->field_data[UF_SCHEMA].off;
-    size_t schema_len = u->field_data[UF_SCHEMA].len;
-
-    if (schema_len == 5 && strncasecmp(schema, "https", 5) == 0) {
-      if (url_len >= out_len) {
-        ESP_LOGE(TAG, "HTTPS URL is too long for buffer");
-        return false;
-      }
-      memcpy(out_url, url, url_len + 1);
-      return true;
-    }
-    if (schema_len != 4 || strncasecmp(schema, "http", 4) != 0) {
-      ESP_LOGE(TAG, "Unsupported protocol: %.*s",
-               static_cast<int>(schema_len), schema);
-      return false;
-    }
-  } else {
-    ESP_LOGE(TAG, "URL schema missing");
-    return false;
-  }
-  return true;
-}
-
-bool resolve_and_validate_host(const char* url,
-                               const struct http_parser_url* u,
+bool resolve_and_validate_host(const ota_url_parts_t* parts,
                                char* ip_str, size_t ip_str_len,
                                bool* is_ipv6) {
-  if (!(u->field_set & (1 << UF_HOST))) {
+  if (!parts || !parts->host || parts->host_len == 0) {
     ESP_LOGE(TAG, "URL host missing");
     return false;
   }
 
   char host[256];
-  size_t host_len = u->field_data[UF_HOST].len;
+  size_t host_len = parts->host_len;
   if (host_len >= sizeof(host)) {
     ESP_LOGE(TAG, "URL host is too long");
     return false;
   }
-  memcpy(host, url + u->field_data[UF_HOST].off, host_len);
+  memcpy(host, parts->host, host_len);
   host[host_len] = '\0';
 
   struct addrinfo hints = {};
@@ -131,98 +103,32 @@ bool resolve_and_validate_host(const char* url,
   return true;
 }
 
-bool reconstruct_url(const char* url, const struct http_parser_url* u,
-                     const char* ip_str, bool is_ipv6, char* out_url,
-                     size_t out_len) {
-  int written = 0;
-
-#define APPEND_URL_PART(format, ...)                                \
-  do {                                                              \
-    size_t remaining =                                              \
-        (written < static_cast<int>(out_len)) ? out_len - written : 0; \
-    int ret =                                                       \
-        snprintf(out_url + written, remaining, format, ##__VA_ARGS__); \
-    if (ret < 0) {                                                  \
-      ESP_LOGE(TAG, "URL reconstruction failed");                   \
-      return false;                                                 \
-    }                                                               \
-    written += ret;                                                 \
-  } while (0)
-
-  APPEND_URL_PART("http://");
-
-  if (u->field_set & (1 << UF_USERINFO)) {
-    APPEND_URL_PART("%.*s@",
-                    static_cast<int>(u->field_data[UF_USERINFO].len),
-                    url + u->field_data[UF_USERINFO].off);
-  }
-
-  if (is_ipv6) {
-    APPEND_URL_PART("[%s]", ip_str);
-  } else {
-    APPEND_URL_PART("%s", ip_str);
-  }
-
-  if (u->field_set & (1 << UF_PORT)) {
-    APPEND_URL_PART(":%.*s",
-                    static_cast<int>(u->field_data[UF_PORT].len),
-                    url + u->field_data[UF_PORT].off);
-  }
-
-  if (u->field_set & (1 << UF_PATH)) {
-    APPEND_URL_PART("%.*s",
-                    static_cast<int>(u->field_data[UF_PATH].len),
-                    url + u->field_data[UF_PATH].off);
-  }
-
-  if (u->field_set & (1 << UF_QUERY)) {
-    APPEND_URL_PART("?%.*s",
-                    static_cast<int>(u->field_data[UF_QUERY].len),
-                    url + u->field_data[UF_QUERY].off);
-  }
-
-  if (u->field_set & (1 << UF_FRAGMENT)) {
-    APPEND_URL_PART("#%.*s",
-                    static_cast<int>(u->field_data[UF_FRAGMENT].len),
-                    url + u->field_data[UF_FRAGMENT].off);
-  }
-
-#undef APPEND_URL_PART
-
-  if (written >= static_cast<int>(out_len)) {
-    ESP_LOGE(TAG, "Rewritten URL is too long for buffer");
-    return false;
-  }
-  return true;
-}
-
 bool validate_and_rewrite_url(const char* url, char* out_url,
                               size_t out_len) {
-  struct http_parser_url u;
-  http_parser_url_init(&u);
-
-  size_t url_len = strlen(url);
-  if (http_parser_parse_url(url, url_len, 0, &u) != 0) {
+  ota_url_parts_t parts = {};
+  if (!ota_url_parse(url, &parts)) {
     ESP_LOGE(TAG, "Failed to parse OTA URL");
     return false;
   }
 
-  if (!check_url_protocol(url, url_len, &u, out_url, out_len)) {
-    return false;
-  }
-
-  if (strncmp(out_url, "https", 5) == 0) {
+  if (parts.https) {
+    if (!ota_url_copy_if_https(url, &parts, out_url, out_len)) {
+      ESP_LOGE(TAG, "HTTPS URL is too long for output buffer");
+      return false;
+    }
     return true;
   }
 
   char ip_str[INET6_ADDRSTRLEN];
   bool is_ipv6;
-  if (!resolve_and_validate_host(url, &u, ip_str, sizeof(ip_str),
+  if (!resolve_and_validate_host(&parts, ip_str, sizeof(ip_str),
                                  &is_ipv6)) {
     return false;
   }
 
-  if (!reconstruct_url(url, &u, ip_str, is_ipv6, out_url, out_len)) {
+  if (!ota_url_rewrite_http_with_ip(&parts, ip_str, is_ipv6, out_url,
+                                    out_len)) {
+    ESP_LOGE(TAG, "Failed to rewrite OTA URL");
     return false;
   }
 
