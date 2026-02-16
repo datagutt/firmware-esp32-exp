@@ -45,13 +45,38 @@ jobs:
       - name: clang-tidy
         run: |
           . $IDF_PATH/export.sh
-          eval "$(idf_tools.py export --tool esp-clang)"
+          eval "$(idf_tools.py export)"
+
+          # Resolve GCC toolchain root so esp-clang can find C/C++ standard headers
+          GCC_TOOLCHAIN="$(dirname "$(dirname "$(which xtensa-esp32s3-elf-gcc)")")"
+
+          # Strip GCC-specific flags from compile_commands.json
+          python3 -c "
+          import json
+          with open('build_tidy/compile_commands.json') as f:
+              db = json.load(f)
+          gcc_flags = [
+              '-mlongcalls', '-fno-malloc-dce', '-fno-tree-switch-conversion',
+              '-fstrict-volatile-bitfields', '-fzero-init-padding-bits=all',
+              '-mdisable-hardware-atomics', '-Wno-old-style-declaration',
+          ]
+          for entry in db:
+              cmd = entry.get('command', '')
+              for flag in gcc_flags:
+                  cmd = cmd.replace(' ' + flag, '')
+              entry['command'] = cmd
+          with open('build_tidy/compile_commands.json', 'w') as f:
+              json.dump(db, f, indent=2)
+          "
+
           FILES="$(git ls-files 'main/**/*.c' 'main/**/*.cpp' 'components/assets/**/*.c' 'components/assets/**/*.cpp')"
           if [ -z "$FILES" ]; then
             echo "No source files found for clang-tidy"
             exit 1
           fi
-          printf '%s\n' "$FILES" | xargs -r -n 25 clang-tidy -p build_tidy
+          printf '%s\n' "$FILES" | xargs -r -n 25 clang-tidy -p build_tidy \
+            --extra-arg=-Wno-unknown-warning-option \
+            --extra-arg="--gcc-toolchain=$GCC_TOOLCHAIN"
 
       - name: cppcheck
         run: |
