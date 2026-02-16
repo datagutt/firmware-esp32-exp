@@ -143,56 +143,76 @@ esp_err_t diag_handler(httpd_req_t* req) {
     cJSON_AddItemToObject(root, "wifi", wifi_obj);
   }
 
-  heap_trend_point_t trend[12] = {};
-  size_t trend_count = heap_monitor_get_trend(trend, 12);
-  cJSON* heap_arr = cJSON_CreateArray();
-  if (heap_arr) {
-    for (size_t i = 0; i < trend_count; ++i) {
-      cJSON* p = cJSON_CreateObject();
-      if (!p) continue;
-      cJSON_AddNumberToObject(p, "uptime_ms", trend[i].uptime_ms);
-      cJSON_AddNumberToObject(p, "internal_free", trend[i].internal_free);
-      cJSON_AddNumberToObject(p, "internal_min", trend[i].internal_min);
-      cJSON_AddNumberToObject(p, "spiram_free", trend[i].spiram_free);
-      cJSON_AddNumberToObject(p, "spiram_min", trend[i].spiram_min);
-      cJSON_AddItemToArray(heap_arr, p);
+  // Heap-allocate large arrays to avoid stack overflow in httpd task
+  constexpr size_t kTrendMax = 12;
+  constexpr size_t kEventsMax = 16;
+  constexpr size_t kOtaEventsMax = 8;
+
+  auto* trend = static_cast<heap_trend_point_t*>(
+      calloc(kTrendMax, sizeof(heap_trend_point_t)));
+  auto* events =
+      static_cast<diag_event_t*>(calloc(kEventsMax, sizeof(diag_event_t)));
+  auto* ota_events =
+      static_cast<diag_event_t*>(calloc(kOtaEventsMax, sizeof(diag_event_t)));
+
+  if (trend) {
+    size_t trend_count = heap_monitor_get_trend(trend, kTrendMax);
+    cJSON* heap_arr = cJSON_CreateArray();
+    if (heap_arr) {
+      for (size_t i = 0; i < trend_count; ++i) {
+        cJSON* p = cJSON_CreateObject();
+        if (!p) continue;
+        cJSON_AddNumberToObject(p, "uptime_ms", trend[i].uptime_ms);
+        cJSON_AddNumberToObject(p, "internal_free", trend[i].internal_free);
+        cJSON_AddNumberToObject(p, "internal_min", trend[i].internal_min);
+        cJSON_AddNumberToObject(p, "spiram_free", trend[i].spiram_free);
+        cJSON_AddNumberToObject(p, "spiram_min", trend[i].spiram_min);
+        cJSON_AddItemToArray(heap_arr, p);
+      }
+      cJSON_AddItemToObject(root, "heap_trend", heap_arr);
     }
-    cJSON_AddItemToObject(root, "heap_trend", heap_arr);
   }
 
-  diag_event_t events[16] = {};
-  size_t ev_count = diag_event_get_recent(events, 16);
-  cJSON* ev_arr = cJSON_CreateArray();
-  if (ev_arr) {
-    for (size_t i = 0; i < ev_count; ++i) {
-      cJSON* e = cJSON_CreateObject();
-      if (!e) continue;
-      cJSON_AddNumberToObject(e, "seq", events[i].seq);
-      cJSON_AddNumberToObject(e, "uptime_ms", events[i].uptime_ms);
-      cJSON_AddStringToObject(e, "level", events[i].level);
-      cJSON_AddStringToObject(e, "type", events[i].type);
-      cJSON_AddNumberToObject(e, "code", events[i].code);
-      cJSON_AddStringToObject(e, "message", events[i].message);
-      cJSON_AddItemToArray(ev_arr, e);
+  if (events) {
+    size_t ev_count = diag_event_get_recent(events, kEventsMax);
+    cJSON* ev_arr = cJSON_CreateArray();
+    if (ev_arr) {
+      for (size_t i = 0; i < ev_count; ++i) {
+        cJSON* e = cJSON_CreateObject();
+        if (!e) continue;
+        cJSON_AddNumberToObject(e, "seq", events[i].seq);
+        cJSON_AddNumberToObject(e, "uptime_ms", events[i].uptime_ms);
+        cJSON_AddStringToObject(e, "level", events[i].level);
+        cJSON_AddStringToObject(e, "type", events[i].type);
+        cJSON_AddNumberToObject(e, "code", events[i].code);
+        cJSON_AddStringToObject(e, "message", events[i].message);
+        cJSON_AddItemToArray(ev_arr, e);
+      }
+      cJSON_AddItemToObject(root, "recent_events", ev_arr);
     }
-    cJSON_AddItemToObject(root, "recent_events", ev_arr);
   }
 
-  diag_event_t ota_events[8] = {};
-  size_t ota_count = diag_event_get_recent_by_prefix("ota_", ota_events, 8);
-  cJSON* ota_arr = cJSON_CreateArray();
-  if (ota_arr) {
-    for (size_t i = 0; i < ota_count; ++i) {
-      cJSON* e = cJSON_CreateObject();
-      if (!e) continue;
-      cJSON_AddNumberToObject(e, "seq", ota_events[i].seq);
-      cJSON_AddStringToObject(e, "type", ota_events[i].type);
-      cJSON_AddNumberToObject(e, "code", ota_events[i].code);
-      cJSON_AddStringToObject(e, "message", ota_events[i].message);
-      cJSON_AddItemToArray(ota_arr, e);
+  if (ota_events) {
+    size_t ota_count =
+        diag_event_get_recent_by_prefix("ota_", ota_events, kOtaEventsMax);
+    cJSON* ota_arr = cJSON_CreateArray();
+    if (ota_arr) {
+      for (size_t i = 0; i < ota_count; ++i) {
+        cJSON* e = cJSON_CreateObject();
+        if (!e) continue;
+        cJSON_AddNumberToObject(e, "seq", ota_events[i].seq);
+        cJSON_AddStringToObject(e, "type", ota_events[i].type);
+        cJSON_AddNumberToObject(e, "code", ota_events[i].code);
+        cJSON_AddStringToObject(e, "message", ota_events[i].message);
+        cJSON_AddItemToArray(ota_arr, e);
+      }
+      cJSON_AddItemToObject(root, "ota_history", ota_arr);
     }
-    cJSON_AddItemToObject(root, "ota_history", ota_arr);
   }
+
+  free(trend);
+  free(events);
+  free(ota_events);
 
   char* json = cJSON_PrintUnformatted(root);
   cJSON_Delete(root);
