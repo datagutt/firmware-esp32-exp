@@ -22,6 +22,7 @@
 #include "display.h"
 #include "ota.h"
 #include "remote.h"
+#include "scheduler_fsm.h"
 #include "sdkconfig.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -293,7 +294,9 @@ void prefetch_timer_callback(void*) {
   ESP_LOGD(TAG, "Prefetch timer fired");
 
   if (ctx.mode == Mode::HTTP && ctx.state == State::PLAYING) {
-    transition_to(State::HTTP_PREFETCHING);
+    scheduler_state_t next = scheduler_fsm_next_state(
+        SCHED_MODE_HTTP, SCHED_STATE_PLAYING, SCHED_EVT_PREFETCH_TIMER, false);
+    transition_to(static_cast<State>(next));
     http_trigger_fetch();
   }
 }
@@ -302,7 +305,10 @@ void retry_timer_callback(void*) {
   ESP_LOGI(TAG, "Retry timer fired");
 
   if (ctx.mode == Mode::HTTP) {
-    transition_to(State::HTTP_FETCHING);
+    scheduler_state_t next = scheduler_fsm_next_state(
+        SCHED_MODE_HTTP, static_cast<scheduler_state_t>(ctx.state),
+        SCHED_EVT_RETRY_TIMER, false);
+    transition_to(static_cast<State>(next));
     http_trigger_fetch();
   }
 }
@@ -329,7 +335,9 @@ void on_player_stopped() {
   switch (ctx.mode) {
     case Mode::WEBSOCKET:
       // WS mode: server pushes next content, just go idle
-      transition_to(State::IDLE);
+      transition_to(static_cast<State>(scheduler_fsm_next_state(
+          SCHED_MODE_WEBSOCKET, static_cast<scheduler_state_t>(ctx.state),
+          SCHED_EVT_PLAYER_STOPPED, false)));
       break;
 
     case Mode::HTTP:
@@ -338,10 +346,14 @@ void on_player_stopped() {
         http_apply_prefetch();
       } else if (ctx.state == State::HTTP_PREFETCHING) {
         // Still fetching — stay in fetching state, will apply when done
-        transition_to(State::HTTP_FETCHING);
+        transition_to(static_cast<State>(scheduler_fsm_next_state(
+            SCHED_MODE_HTTP, static_cast<scheduler_state_t>(ctx.state),
+            SCHED_EVT_PLAYER_STOPPED, false)));
       } else {
         // No prefetch was started (short dwell?). Fetch now.
-        transition_to(State::HTTP_FETCHING);
+        transition_to(static_cast<State>(scheduler_fsm_next_state(
+            SCHED_MODE_HTTP, static_cast<scheduler_state_t>(ctx.state),
+            SCHED_EVT_PLAYER_STOPPED, false)));
         http_trigger_fetch();
       }
       break;
@@ -460,6 +472,9 @@ void scheduler_on_ws_disconnect() {
   ctx.ws_connected = false;
   stop_timers();
   gfx_play_embedded("no_connect", true);
-  transition_to(State::IDLE);
+  transition_to(static_cast<State>(scheduler_fsm_next_state(
+      static_cast<scheduler_mode_t>(ctx.mode),
+      static_cast<scheduler_state_t>(ctx.state), SCHED_EVT_WS_DISCONNECTED,
+      false)));
   ESP_LOGI(TAG, "WS disconnected — showing no_connect sprite");
 }
