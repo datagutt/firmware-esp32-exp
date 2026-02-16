@@ -146,8 +146,6 @@ void process_text_message(const char* json_str) {
   bool has_sntp_server = false;
   const char* image_url_value = nullptr;
   bool has_image_url = false;
-  bool bool_val = false;
-
   auto validate_or_abort = [&](bool ok) {
     if (!ok) {
       ESP_LOGW(TAG, "Validation failed: %s", validation_err);
