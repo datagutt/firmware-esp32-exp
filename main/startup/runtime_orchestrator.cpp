@@ -2,11 +2,9 @@
 
 #include <cstring>
 
-#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/idf_additions.h>
 #include <freertos/task.h>
 
 #include "ap.h"
@@ -153,24 +151,10 @@ void runtime_orchestrator_start(bool button_boot) {
   s_button_boot = button_boot;
   s_config_received = false;
 
-  BaseType_t ret = pdFAIL;
-#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
-  ret = xTaskCreatePinnedToCoreWithCaps(
-      runtime_task, "runtime_coord", RUNTIME_TASK_STACK_SIZE, nullptr,
-      RUNTIME_TASK_PRIORITY, nullptr, tskNO_AFFINITY,
-      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (ret != pdPASS) {
-    ESP_LOGW(TAG,
-             "Failed to create runtime coordinator in PSRAM stack; retrying "
-             "internal RAM");
-  }
-#endif
-  if (ret != pdPASS) {
-    ret = xTaskCreate(runtime_task, "runtime_coord", RUNTIME_TASK_STACK_SIZE,
-                      nullptr, RUNTIME_TASK_PRIORITY, nullptr);
-  }
+  BaseType_t ret = xTaskCreate(runtime_task, "runtime_coord",
+                               RUNTIME_TASK_STACK_SIZE, nullptr,
+                               RUNTIME_TASK_PRIORITY, nullptr);
   if (ret != pdPASS) {
     ESP_LOGE(TAG, "Failed to create runtime coordinator task");
   }
 }
-
