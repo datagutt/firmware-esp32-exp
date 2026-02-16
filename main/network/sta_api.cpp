@@ -52,6 +52,10 @@ const char* reset_reason_to_string(esp_reset_reason_t reason) {
       return "brownout";
     case ESP_RST_SDIO:
       return "sdio";
+    case ESP_RST_USB:
+      return "usb";
+    case ESP_RST_JTAG:
+      return "jtag";
     default:
       return "unmapped";
   }
