@@ -7,6 +7,8 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_app_desc.h>
+#include <esp_app_format.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_wifi.h>
@@ -446,6 +448,41 @@ esp_err_t update_handler(httpd_req_t* req) {
   ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%lx",
            update_partition->subtype, update_partition->address);
 
+  // Read first chunk and validate it looks like an app image (not a merged
+  // firmware containing bootloader + partition table + app).
+  int received = httpd_req_recv(
+      req, buf, (req->content_len < OTA_BUFFER_SIZE ? req->content_len
+                                                    : OTA_BUFFER_SIZE));
+  if (received <= 0) {
+    ESP_LOGE(TAG, "Failed to receive first OTA chunk");
+    free(buf);
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
+    return ESP_FAIL;
+  }
+
+  // A valid app binary has the app descriptor magic (0xABCD5432) at byte 32
+  // (24-byte image header + 8-byte segment header). A merged_firmware.bin starts
+  // with the bootloader and won't have this magic at that offset.
+  constexpr size_t kAppDescOffset =
+      sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t);
+  if (static_cast<size_t>(received) >= kAppDescOffset + sizeof(uint32_t)) {
+    uint32_t magic = 0;
+    memcpy(&magic, buf + kAppDescOffset, sizeof(magic));
+    if (magic != ESP_APP_DESC_MAGIC_WORD) {
+      ESP_LOGE(TAG,
+               "Not a valid app image (magic 0x%08lx at offset %u, expected "
+               "0x%08lx). Did you upload merged_firmware.bin instead of the "
+               "app binary?",
+               (unsigned long)magic, (unsigned)kAppDescOffset,
+               (unsigned long)ESP_APP_DESC_MAGIC_WORD);
+      free(buf);
+      httpd_resp_send_err(
+          req, HTTPD_400_BAD_REQUEST,
+          "Invalid firmware file. Use the app .bin, not merged_firmware.bin");
+      return ESP_FAIL;
+    }
+  }
+
   esp_err_t err =
       esp_ota_begin(update_partition, req->content_len, &update_handle);
   if (err != ESP_OK) {
@@ -456,8 +493,17 @@ esp_err_t update_handler(httpd_req_t* req) {
     return ESP_FAIL;
   }
 
-  int received;
-  int remaining = req->content_len;
+  // Write the first chunk we already received
+  err = esp_ota_write(update_handle, buf, received);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "esp_ota_write failed (%s)", esp_err_to_name(err));
+    esp_ota_end(update_handle);
+    free(buf);
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+    return ESP_FAIL;
+  }
+
+  int remaining = req->content_len - received;
 
   while (remaining > 0) {
     received = httpd_req_recv(
