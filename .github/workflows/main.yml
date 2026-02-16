@@ -37,6 +37,7 @@ jobs:
       - name: cppcheck
         run: |
           cppcheck --enable=warning,performance,portability \
+            --force \
             --error-exitcode=1 \
             --inline-suppr \
             -I main \
