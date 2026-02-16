@@ -524,7 +524,7 @@ void display_version_info(const char* img_url) {
 //------------------------------------------------------------------------------
 
 void player_task(void*) {
-  ESP_LOGI(TAG, "Player task started on core %d", xPortGetCoreID());
+  ESP_LOGD(TAG, "Player task started on core %d", xPortGetCoreID());
 
   while (true) {
     State state = ctx.state.load();
@@ -673,7 +673,8 @@ int gfx_initialize(const char* img_url) {
     return 1;
   }
 
-  ESP_LOGI(TAG, "WebP player initialized");
+  ESP_LOGI(TAG, "WebP player initialized (task core=%d, stack=%u)", TASK_CORE,
+           TASK_STACK_SIZE);
   return 0;
 }
 
