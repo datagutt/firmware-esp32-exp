@@ -1,0 +1,55 @@
+main/sta_api.c
+  ec41194234837a03 123-126
+main/main.c
+  ec41194234837a03 523-529
+main/ap.h
+  ec41194234837a03 34,36-38,40
+main/ap.c
+  ec41194234837a03 16,313-316,325,342-350,352-359
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "144051e85aeb8907ce6521b974d127c588810dbc",
+  "prompts": {
+    "56c877c7be6bf528": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b03ab5e1-900e-43af-9656-2a1a91b0ab48",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 701,
+      "total_deletions": 14,
+      "accepted_lines": 701,
+      "overriden_lines": 0
+    },
+    "8a4293785ccc4729": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b0b4748-3571-4569-90ca-488e028a55e6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 203,
+      "overriden_lines": 0
+    },
+    "ec41194234837a03": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "07523d1c-6240-4c5d-b3a5-c7f4d45ba16e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 72,
+      "total_deletions": 47,
+      "accepted_lines": 43,
+      "overriden_lines": 0
+    }
+  }
+}
