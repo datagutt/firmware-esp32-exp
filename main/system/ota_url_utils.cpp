@@ -136,50 +136,59 @@ bool ota_url_rewrite_http_with_ip(const ota_url_parts_t* parts,
     return false;
   }
 
-  int written = 0;
-  auto append = [&](const char* fmt, auto... args) -> bool {
-    size_t remaining = (written < static_cast<int>(out_len)) ? out_len - written : 0;
-    int n = snprintf(out_url + written, remaining, fmt, args...);
-    if (n < 0) return false;
+  size_t written = 0;
+  auto append_str = [&](const char* s) -> bool {
+    if (!s) return false;
+    size_t n = strlen(s);
+    if (written + n >= out_len) return false;
+    memcpy(out_url + written, s, n);
     written += n;
-    return written < static_cast<int>(out_len);
+    out_url[written] = '\0';
+    return true;
   };
 
-  if (!append("http://")) return false;
+  out_url[0] = '\0';
+  if (!append_str("http://")) return false;
   if (parts->userinfo && parts->userinfo_len > 0) {
     char ui[128];
     if (!copy_part(ui, sizeof(ui), parts->userinfo, parts->userinfo_len)) return false;
-    if (!append("%s@", ui)) return false;
+    if (!append_str(ui)) return false;
+    if (!append_str("@")) return false;
   }
 
   if (is_ipv6) {
-    if (!append("[%s]", ip_str)) return false;
+    if (!append_str("[")) return false;
+    if (!append_str(ip_str)) return false;
+    if (!append_str("]")) return false;
   } else {
-    if (!append("%s", ip_str)) return false;
+    if (!append_str(ip_str)) return false;
   }
 
   if (parts->port && parts->port_len > 0) {
     char port[32];
     if (!copy_part(port, sizeof(port), parts->port, parts->port_len)) return false;
-    if (!append(":%s", port)) return false;
+    if (!append_str(":")) return false;
+    if (!append_str(port)) return false;
   }
 
   if (parts->path && parts->path_len > 0) {
     char path[256];
     if (!copy_part(path, sizeof(path), parts->path, parts->path_len)) return false;
-    if (!append("%s", path)) return false;
+    if (!append_str(path)) return false;
   }
 
   if (parts->query && parts->query_len > 0) {
     char query[256];
     if (!copy_part(query, sizeof(query), parts->query, parts->query_len)) return false;
-    if (!append("?%s", query)) return false;
+    if (!append_str("?")) return false;
+    if (!append_str(query)) return false;
   }
 
   if (parts->fragment && parts->fragment_len > 0) {
     char fragment[128];
     if (!copy_part(fragment, sizeof(fragment), parts->fragment, parts->fragment_len)) return false;
-    if (!append("#%s", fragment)) return false;
+    if (!append_str("#")) return false;
+    if (!append_str(fragment)) return false;
   }
 
   return true;
