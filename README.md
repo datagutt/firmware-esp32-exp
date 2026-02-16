@@ -106,6 +106,112 @@ The firmware has a rudimentary wifi config portal page that can be accessed by j
 
 [WiFi Config Portal How-To Video](https://www.youtube.com/watch?v=OAWUCG-HRDs)
 
+## API Routes
+
+### HTTP API (STA mode)
+
+Available on the device's IP once connected to WiFi. All endpoints return JSON and support CORS (`OPTIONS /api/*`).
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/status` | Firmware version, MAC address, free heap/SPIRAM, min free heap, images loaded count, device temperature, diag events status |
+| `GET` | `/api/health` | Simple health check. Returns `{"status":"ok"}` (200) or `{"status":"degraded"}` (503) based on WiFi connectivity |
+| `GET` | `/api/about` | Board model, device type, firmware version |
+| `GET` | `/api/diag` | Diagnostics: reboot reason, WiFi stats (reconnect attempts, disconnect events), heap trend history, recent diagnostic events, OTA history |
+| `GET` | `/api/system/config` | Current system config: auto timezone, timezone, NTP server, hostname, diag events enabled |
+| `POST` | `/api/system/config` | Update system config. Accepts JSON with optional keys: `auto_timezone` (bool), `timezone` (string), `ntp_server` (string), `hostname` (string), `diag_events_enabled` (bool) |
+| `GET` | `/api/time/zonedb` | Full IANA timezone database (chunked response). Returns array of `{name, rule}` objects |
+
+### WebSocket Interface
+
+The device connects to the server via WebSocket. Messages are handled as follows:
+
+**Binary messages** — Raw WebP image data. Supports chunked/fragmented frames. Images are queued for display with the current dwell time.
+
+**Text messages** — JSON commands with the following optional keys:
+
+| Key | Type | Description |
+| :--- | :--- | :--- |
+| `immediate` | bool | Interrupt current animation and show next queued image |
+| `dwell_secs` | int (1–3600) | How long to display each image |
+| `brightness` | int | Display brightness level |
+| `ota_url` | string | URL to download and flash a firmware update |
+| `swap_colors` | bool | Swap RGB color order (persisted to NVS) |
+| `wifi_power_save` | int (0–2) | WiFi power save mode (persisted to NVS) |
+| `skip_display_version` | bool | Skip version display on boot (persisted to NVS) |
+| `ap_mode` | bool | Enable/disable config portal AP (persisted to NVS) |
+| `prefer_ipv6` | bool | Prefer IPv6 connectivity (persisted to NVS) |
+| `hostname` | string | Device hostname (persisted to NVS) |
+| `syslog_addr` | string | Syslog server `host:port` (persisted to NVS) |
+| `sntp_server` | string | Custom NTP server (persisted to NVS) |
+| `image_url` | string | Remote image URL (persisted to NVS) |
+| `reboot` | bool | Reboot the device |
+
+### Captive Portal (AP mode)
+
+Available when the device is in AP configuration mode (SSID: `TRON-CONFIG`, IP: `10.10.0.1`).
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/` | WiFi setup form (SSID, password, image URL, swap colors) |
+| `POST` | `/save` | Save WiFi credentials and config, then reboot |
+| `POST` | `/update` | OTA firmware upload (binary `.bin` file) |
+| `GET` | `/hotspot-detect.html` | Captive portal redirect (Apple) |
+| `GET` | `/generate_204` | Captive portal redirect (Android) |
+| `GET` | `/ncsi.txt` | Captive portal redirect (Windows) |
+| `GET` | `/*` | Wildcard catch-all redirect to portal |
+
+## Differences from Original Firmware
+
+This project is a modernized rewrite of the [original Tronbyt firmware](inspiration/original-fw). The `inspiration/` directory contains the original source for reference. Key differences:
+
+### Display Driver
+
+| | Original Firmware | This Project |
+| :--- | :--- | :--- |
+| **Library** | [ESP32-HUB75-MatrixPanel-DMA](https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA) v3.0.13 | [esp-hub75](https://github.com/datagutt/esp-hub75) |
+| **Driver class** | `MatrixPanel_I2S_DMA` | `Hub75Driver` |
+| **Pin config** | Hardcoded `#define` per board | Kconfig-driven (`CONFIG_HUB75_*`) |
+| **Frame sync** | None | VSYNC via `CONFIG_DISPLAY_FRAME_SYNC` (eliminates tearing) |
+| **Protocol** | I2S DMA only | GDMA (ESP32-S3) and PARLIO support |
+| **128x64 panels** | Supported (Tronbyt S3 Wide) | Scaled buffer with PSRAM fallback |
+
+### Architecture
+
+| | Original Firmware | This Project |
+| :--- | :--- | :--- |
+| **Language** | Mostly C | C++ |
+| **Structure** | Flat — all source files in `main/` | Modular — `main/display/`, `main/network/`, `main/system/`, `main/scheduler/`, `main/startup/`, `main/config/` |
+| **Startup** | Sequential init in `main()` | Runtime orchestrator with event-driven startup |
+| **WebP player** | Integrated into `main.c` / `gfx.c` | Dedicated `webp_player` component with event system (`GFX_PLAYER_EVENTS`) |
+| **Networking** | Single `remote.c` | Split into handlers, sockets, HTTP server, STA API, mDNS, API validation |
+
+### Dependencies
+
+| | Original Firmware | This Project |
+| :--- | :--- | :--- |
+| **Display** | `ESP32-HUB75-MatrixPanel-DMA` | `esp-hub75` (datagutt/esp-hub75) |
+| **WebP** | `tronbyt/libwebp` | `datagutt/libwebp` |
+| **WebSocket** | `esp_websocket_client` 1.6.0 | `esp_websocket_client` 1.6.1 |
+| **JSON** | — | `espressif/cjson` |
+| **mDNS** | — | `espressif/mdns` |
+
+### Additional Features (not in original)
+
+- **HTTP REST API** — status, health, diagnostics, system config, and timezone database endpoints (see [API Routes](#api-routes))
+- **USB Serial console** — interactive diagnostics via `CONFIG_ENABLE_CONSOLE`
+- **Heap monitor** — tracks memory usage with trend history
+- **Device temperature** — on-chip temperature sensor reading
+- **Diagnostic event ring** — in-memory event log with OTA history
+- **mDNS service advertisement** — automatic start/stop on WiFi events
+- **API input validation** — strict JSON key/type validation with error reporting
+- **Embedded timezone database** — full IANA timezone DB served over HTTP
+- **Scheduler FSM** — finite state machine for playback orchestration with HTTP prefetch
+- **Runtime orchestrator** — event-driven startup with WiFi credential validation
+- **CORS support** — cross-origin requests enabled on all API endpoints
+- **Clean display shutdown** — `gfx_safe_restart` for graceful reboot
+- **OTA image validation** — checks app descriptor magic to reject merged binaries uploaded via portal
+
 ## Troubleshooting
 
 ### OTA Update Fails with "Validation Failed" or "Checksum Error"
