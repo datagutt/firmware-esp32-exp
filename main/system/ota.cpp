@@ -18,6 +18,7 @@
 #include <lwip/sockets.h>
 
 #include "display.h"
+#include "diag_event_ring.h"
 #include "webp_player.h"
 
 namespace {
@@ -237,16 +238,21 @@ void run_ota(const char* url) {
   bool expected = false;
   if (!s_ota_in_progress.compare_exchange_strong(expected, true)) {
     ESP_LOGW(TAG, "OTA already in progress, ignoring request");
+    diag_event_log("WARN", "ota_busy", 0,
+                   "OTA request dropped because update is already running");
     return;
   }
 
   char final_url[512] = {0};
   if (!validate_and_rewrite_url(url, final_url, sizeof(final_url))) {
+    diag_event_log("ERROR", "ota_validate_fail", -1,
+                   "OTA URL validation failed");
     s_ota_in_progress.store(false);
     return;
   }
 
   ESP_LOGI(TAG, "Starting OTA update from URL: %s", final_url);
+  diag_event_log("INFO", "ota_start", 0, final_url);
 
   esp_http_client_config_t http_config = {};
   http_config.url = final_url;
@@ -275,6 +281,7 @@ void run_ota(const char* url) {
   esp_err_t err = esp_https_ota_begin(&ota_config, &https_ota_handle);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed: %s", esp_err_to_name(err));
+    diag_event_log("ERROR", "ota_begin_fail", err, esp_err_to_name(err));
     display_clear();
     display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
     display_flip();
@@ -318,6 +325,7 @@ void run_ota(const char* url) {
 
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "OTA Update failed: %s", esp_err_to_name(err));
+    diag_event_log("ERROR", "ota_perform_fail", err, esp_err_to_name(err));
     esp_https_ota_finish(https_ota_handle);
     display_clear();
     display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
@@ -329,6 +337,7 @@ void run_ota(const char* url) {
     err = esp_https_ota_finish(https_ota_handle);
     if (err == ESP_OK) {
       ESP_LOGI(TAG, "OTA Update successful. Rebooting...");
+      diag_event_log("INFO", "ota_success", 0, "OTA update successful");
       display_clear();
       display_text("Rebooting", 2, 10, 0, 255, 0, 1);
       display_flip();
@@ -336,6 +345,7 @@ void run_ota(const char* url) {
       esp_restart();
     } else {
       ESP_LOGE(TAG, "OTA Finish failed: %s", esp_err_to_name(err));
+      diag_event_log("ERROR", "ota_finish_fail", err, esp_err_to_name(err));
       display_clear();
       display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
       display_flip();
