@@ -26,6 +26,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Git Safe Directory
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
       - name: Install Host Tooling
         run: |
           apt-get update
