@@ -1,0 +1,27 @@
+main/gfx.h
+  8a4293785ccc4729 4,6,8-11,22-34
+main/gfx.c
+  8a4293785ccc4729 5,9,26-28,32,40,83-88,191,343,367,375,382-398,410,435-438,453,463,469-473,479,505,508,511,517,547,550,554-555,562-564
+main/main.c
+  8a4293785ccc4729 179,415,751-752,754,758
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "424b727c53efcd886dedb84a2e74c36b6b368a03",
+  "prompts": {
+    "8a4293785ccc4729": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b0b4748-3571-4569-90ca-488e028a55e6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 318,
+      "total_deletions": 75,
+      "accepted_lines": 308,
+      "overriden_lines": 0
+    }
+  }
+}
