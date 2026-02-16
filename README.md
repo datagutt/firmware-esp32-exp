@@ -19,7 +19,7 @@ Follow the setup instructions for [tronbyt-server][3] unless you want to build y
 Only follow these instructions if you want to build the firmware yourself. Otherwise let the [tronbyt-server][3] generate the firmware file for you.
 This project uses the native [ESP-IDF][2] framework to build, flash, and monitor firmware.
 
-Additionally, this firmware is designed to work with https://github.com/tronbyt/server or
+Additionally, this firmware is designed to work with <https://github.com/tronbyt/server> or
 you can point this firmware at any URL that hosts a WebP image that is optimized for the Tidbyt display.
 
 ### Configuration
@@ -30,6 +30,7 @@ To flash the custom firmware on your device, follow these steps:
 2. Edit `secrets.json` with your information. If using tronbyt_manager in Docker, use the Docker host's IP address.
 
 Example `secrets.json`:
+
 ```json
 {
     "WIFI_SSID": "myssid",
@@ -98,11 +99,11 @@ The easiest way to restore your Tidbyt to factory firmware is using the web flas
 
 ![Web Flasher Settings](docs/assets/web_flasher_settings.png)
 
-4. Click "Program" to flash the factory firmware
+1. Click "Program" to flash the factory firmware
 
 ### Using the WiFi config portal
 
-The firmware has a rudimentary wifi config portal page that can be accessed by joining the TRONBYT-CONFIG network and navigating to http://10.10.0.1. 
+The firmware has a rudimentary wifi config portal page that can be accessed by joining the TRONBYT-CONFIG network and navigating to <http://10.10.0.1>.
 
 [WiFi Config Portal How-To Video](https://www.youtube.com/watch?v=OAWUCG-HRDs)
 
@@ -163,7 +164,7 @@ Available when the device is in AP configuration mode (SSID: `TRON-CONFIG`, IP: 
 
 ## Differences from Original Firmware
 
-This project is a modernized rewrite of the [original Tronbyt firmware](inspiration/original-fw). The `inspiration/` directory contains the original source for reference. Key differences:
+This project is a modernized rewrite of the [original Tronbyt firmware](https://github.com/tronbyt/firmware-esp32).
 
 ### Display Driver
 
@@ -218,15 +219,13 @@ This project is a modernized rewrite of the [original Tronbyt firmware](inspirat
 
 If you are seeing errors like `ESP_ERR_OTA_VALIDATE_FAILED` or checksum mismatches in the logs, especially on Gen 1 devices previously used with ESPHome or stock firmware:
 
-1.  **Partition Table Mismatch:** You likely have an old or incompatible partition table on your device. This happens if you flashed only the `firmware.bin` instead of the full `merged.bin` during the initial install.
+1. **Partition Table Mismatch:** You likely have an old or incompatible partition table on your device. This happens if you flashed only the `firmware.bin` instead of the full `merged.bin` during the initial install.
 
-2.  **Solution:** You must perform a **clean install**.
+2. **Solution:** You must perform a **clean install**.
 
-    *   Use the **Web Flasher** method described in "Back to Normal.
-    *   Ensure you select the **merged binary** (`gen1_merged.bin`).
-    *   Ideally, use the "Erase Flash" option in the flasher tool before programming to ensure a clean slate.
+    - Use the **Web Flasher** method described in "Back to Normal.
+    - Ensure you select the **merged binary** (`gen1_merged.bin`).
+    - Ideally, use the "Erase Flash" option in the flasher tool before programming to ensure a clean slate.
 
-
-[1]: https://github.com/tidbyt/pixlet
 [2]: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html
 [3]: https://github.com/tronbyt/server
