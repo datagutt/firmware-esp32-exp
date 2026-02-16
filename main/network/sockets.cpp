@@ -30,6 +30,7 @@ const char* TAG = "sockets";
 // ---------------------------------------------------------------------------
 
 constexpr int64_t RECONNECT_DELAY_US = 5000 * 1000;  // 5 seconds
+constexpr int64_t INITIAL_CONNECT_DELAY_US = 500 * 1000;  // 0.5 seconds
 constexpr int64_t HEALTH_CHECK_INTERVAL_US = 30000 * 1000;  // 30 seconds
 
 // ---------------------------------------------------------------------------
@@ -167,7 +168,6 @@ esp_err_t start_client() {
 
   esp_websocket_client_config_t ws_cfg = {};
   ws_cfg.uri = ctx.url;
-  ws_cfg.task_stack = 8192;
   ws_cfg.buffer_size = 8192;
   ws_cfg.crt_bundle_attach = esp_crt_bundle_attach;
   ws_cfg.reconnect_timeout_ms = 10000;
@@ -253,7 +253,11 @@ void sockets_init(const char* url) {
   // If already connected, start immediately
   if (wifi_is_connected()) {
     ctx.state = State::Ready;
-    start_client();
+    // Defer first connect slightly to let boot-time tasks (including app_main)
+    // release stack/heap before websocket task allocation.
+    esp_timer_start_once(reconnect_timer, INITIAL_CONNECT_DELAY_US);
+    ESP_LOGI(TAG, "Network ready, deferring initial WS connect by %lld ms",
+             INITIAL_CONNECT_DELAY_US / 1000);
   } else {
     ctx.state = State::Disconnected;
     ESP_LOGI(TAG, "Waiting for network...");
