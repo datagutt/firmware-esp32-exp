@@ -31,8 +31,10 @@ jobs:
 
       - name: Install Host Tooling
         run: |
+          . $IDF_PATH/export.sh
+          idf_tools.py install esp-clang
           apt-get update
-          apt-get install -y --no-install-recommends clang-tidy cppcheck cmake g++
+          apt-get install -y --no-install-recommends cppcheck cmake g++
 
       - name: Build Compile Commands
         run: |
@@ -42,6 +44,8 @@ jobs:
 
       - name: clang-tidy
         run: |
+          . $IDF_PATH/export.sh
+          eval "$(idf_tools.py export --tool esp-clang)"
           FILES="$(git ls-files 'main/**/*.c' 'main/**/*.cpp' 'components/assets/**/*.c' 'components/assets/**/*.cpp')"
           if [ -z "$FILES" ]; then
             echo "No source files found for clang-tidy"
