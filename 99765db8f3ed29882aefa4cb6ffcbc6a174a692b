@@ -1,0 +1,29 @@
+main/heap_monitor.h
+  8a4293785ccc4729 1-44
+main/heap_monitor.c
+  8a4293785ccc4729 1-126
+main/CMakeLists.txt
+  8a4293785ccc4729 26
+main/main.c
+  8a4293785ccc4729 17,471-472,621
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.3",
+  "base_commit_sha": "99765db8f3ed29882aefa4cb6ffcbc6a174a692b",
+  "prompts": {
+    "8a4293785ccc4729": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b0b4748-3571-4569-90ca-488e028a55e6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 175,
+      "total_deletions": 6,
+      "accepted_lines": 175,
+      "overriden_lines": 0
+    }
+  }
+}
