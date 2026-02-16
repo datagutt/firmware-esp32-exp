@@ -534,8 +534,9 @@ void player_task(void*) {
   ESP_LOGD(TAG, "Player task started on core %d", xPortGetCoreID());
 
   while (true) {
-    UBaseType_t stack_free = uxTaskGetStackHighWaterMark(NULL);
-    ESP_LOGI(TAG, "Stack remaining: %u bytes", stack_free);
+    // --- Truly an useless log, but can be helpful for verifying task is running and not stuck in a dead loop ---
+    //UBaseType_t stack_free = uxTaskGetStackHighWaterMark(NULL);
+    //ESP_LOGI(TAG, "Stack remaining: %u bytes", stack_free);
 
     State state = ctx.state.load();
 
