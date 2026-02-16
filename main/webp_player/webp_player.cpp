@@ -665,9 +665,16 @@ int gfx_initialize(const char* img_url) {
     ctx.state.store(State::PLAYING);
   }
 
-  BaseType_t ret = xTaskCreatePinnedToCore(
+  BaseType_t ret = xTaskCreatePinnedToCoreWithCaps(
       player_task, "webp_player", TASK_STACK_SIZE, nullptr,
-      TASK_PRIORITY, &ctx.task, TASK_CORE);
+      TASK_PRIORITY, &ctx.task, TASK_CORE,
+      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (ret != pdPASS) {
+    ESP_LOGW(TAG, "PSRAM task creation failed, retrying with internal RAM");
+    ret = xTaskCreatePinnedToCore(
+        player_task, "webp_player", TASK_STACK_SIZE, nullptr,
+        TASK_PRIORITY, &ctx.task, TASK_CORE);
+  }
   if (ret != pdPASS) {
     ESP_LOGE(TAG, "Could not create player task");
     return 1;

@@ -214,7 +214,12 @@ void process_text_message(const char* json_str) {
     char* ota_url = strdup(ota_url_value);
     if (ota_url) {
       ESP_LOGI(TAG, "OTA URL received via WS: %s", ota_url);
-      xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+      BaseType_t ota_rc = xTaskCreatePinnedToCoreWithCaps(
+          ota_task_entry, "ota_task", 8192, ota_url, 5,
+          nullptr, tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (ota_rc != pdPASS) {
+        xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+      }
     }
   }
 

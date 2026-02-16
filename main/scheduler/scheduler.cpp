@@ -16,6 +16,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/idf_additions.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
@@ -227,8 +228,13 @@ void http_trigger_fetch() {
     return;
   }
 
-  xTaskCreatePinnedToCore(http_fetch_task, "http_fetch", 8192, nullptr, 3,
-                          &ctx.fetch_task, 0);
+  BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
+      http_fetch_task, "http_fetch", 8192, nullptr, 3,
+      &ctx.fetch_task, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (rc != pdPASS) {
+    xTaskCreatePinnedToCore(http_fetch_task, "http_fetch", 8192, nullptr, 3,
+                            &ctx.fetch_task, 0);
+  }
 }
 
 void http_apply_prefetch() {
@@ -239,7 +245,12 @@ void http_apply_prefetch() {
     char* ota_url = ctx.prefetch.ota_url;
     ctx.prefetch.ota_url = nullptr;
     ESP_LOGI(TAG, "OTA URL received via HTTP: %s", ota_url);
-    xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+    BaseType_t ota_rc = xTaskCreatePinnedToCoreWithCaps(
+        ota_task_entry, "ota_task", 8192, ota_url, 5,
+        nullptr, tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ota_rc != pdPASS) {
+      xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+    }
   }
 
   if (ctx.prefetch.failed) {
