@@ -14,8 +14,55 @@ permissions:
   contents: write
 
 jobs:
+  quality:
+    name: Quality Gates
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0-beta2
+    env:
+      IDF_CCACHE_ENABLE: "1"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Host Tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends clang-tidy cppcheck cmake g++
+
+      - name: Build Compile Commands
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py -B build_tidy -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tronbyt-s3" set-target esp32s3
+          idf.py -B build_tidy reconfigure
+
+      - name: clang-tidy
+        run: |
+          FILES="$(git ls-files 'main/**/*.c' 'main/**/*.cpp' 'components/assets/**/*.c' 'components/assets/**/*.cpp')"
+          if [ -z "$FILES" ]; then
+            echo "No source files found for clang-tidy"
+            exit 1
+          fi
+          printf '%s\n' "$FILES" | xargs -r -n 25 clang-tidy -p build_tidy
+
+      - name: cppcheck
+        run: |
+          cppcheck --enable=warning,performance,portability \
+            --error-exitcode=1 \
+            --inline-suppr \
+            -I main \
+            -I main/network \
+            -I main/system \
+            main \
+            components/assets
+
+      - name: Host Tests
+        run: test/host/run_tests.sh
+
   build:
     name: Build ${{ matrix.target }}
+    needs: quality
     runs-on: ubuntu-latest
     container: espressif/idf:v6.0-beta2
     strategy:
@@ -103,6 +150,51 @@ jobs:
           # Rename for artifact upload
           mv "$BUILD_DIR/firmware.bin" "${target}_firmware.bin"
           mv "$BUILD_DIR/merged_firmware.bin" "${target}_merged.bin"
+
+      - name: Size Delta Check
+        if: github.event_name == 'pull_request'
+        run: |
+          . $IDF_PATH/export.sh
+          target="${{ matrix.target }}"
+
+          case "$target" in
+            tronbyt-s3*|matrixportal-s3*)
+              chip="esp32s3"
+              ;;
+            *)
+              chip="esp32"
+              ;;
+          esac
+
+          BASE_SHA="$(git merge-base HEAD origin/main)"
+          if [ -z "$BASE_SHA" ]; then
+            echo "No merge-base found; skipping size delta check"
+            exit 0
+          fi
+
+          WT="/tmp/base-${target}-${BASE_SHA:0:8}"
+          git worktree add "$WT" "$BASE_SHA"
+          cp secrets.cmake "$WT/secrets.cmake" || true
+
+          pushd "$WT"
+          idf.py -B build_base -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.$target" set-target "$chip"
+          idf.py -B build_base build
+          BASE_SIZE=$(stat -c%s build_base/firmware.bin)
+          popd
+
+          HEAD_SIZE=$(stat -c%s "${target}_firmware.bin")
+          DELTA=$((HEAD_SIZE - BASE_SIZE))
+          LIMIT=32768
+          echo "Base size: $BASE_SIZE"
+          echo "Head size: $HEAD_SIZE"
+          echo "Delta: $DELTA bytes (limit: +$LIMIT)"
+
+          git worktree remove "$WT" --force
+
+          if [ "$DELTA" -gt "$LIMIT" ]; then
+            echo "Firmware size regression too large for $target: +$DELTA bytes"
+            exit 1
+          fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v6
