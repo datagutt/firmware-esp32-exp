@@ -2,13 +2,13 @@
  * touch_control.h
  *
  * Touch control interface for Tidbyt Gen 2
- * Single touch zone on GPIO33 (TOUCH_PAD_NUM8)
+ * Single touch zone on GPIO33 (Touch Channel 8)
  */
 
 #ifndef TOUCH_CONTROL_H
 #define TOUCH_CONTROL_H
 
-#include "driver/touch_pad.h"
+#include "driver/touch_sens.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -18,9 +18,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// Touch pad assignment for Tidbyt Gen 2
-#define TOUCH_PAD_MAIN TOUCH_PAD_NUM8  // GPIO33
 
 // Touch threshold - based on ESPHome Tidbyt Gen2 config
 // Untouched values are typically 900-1000, touched drops below this
@@ -48,7 +45,7 @@ uint16_t touch_control_get_threshold(void);
 void touch_control_set_debounce(uint32_t ms);
 void touch_control_calibrate(void);
 void touch_control_debug_all_pads(void);
-uint16_t touch_control_read_raw(touch_pad_t pad);
+uint16_t touch_control_read_raw(void);
 bool touch_control_is_initialized(void);
 const char* touch_event_to_string(touch_event_t event);
 
