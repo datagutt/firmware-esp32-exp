@@ -1,0 +1,23 @@
+main/scheduler/scheduler.cpp
+  7530cad12ec6aea1 478
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "d6362ae09c0249c0bcd62e8f51eb3b17e0067588",
+  "prompts": {
+    "7530cad12ec6aea1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d44a5dab-0b32-4aec-ac39-236fda0ecccb",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
