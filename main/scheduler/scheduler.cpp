@@ -475,6 +475,7 @@ void scheduler_stop() {
 
 void scheduler_on_ws_connect() {
   ctx.ws_connected = true;
+  gfx_interrupt();
   transition_to(State::IDLE);
   ESP_LOGI(TAG, "WS connected — awaiting content");
 }
