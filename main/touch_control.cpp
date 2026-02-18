@@ -1,5 +1,5 @@
 /**
- * touch_control.c
+ * touch_control.cpp
  *
  * Touch control for Tidbyt Gen 2
  * Single touch zone on GPIO33 (Touch Channel 8)
@@ -12,76 +12,69 @@
 
 #include "touch_control.h"
 
-#include <string.h>
+#include <cstring>
 
-static const char* TAG = "TouchControl";
+namespace {
+
+constexpr const char* TAG = "TouchControl";
 
 // Touch channel 8 = GPIO33 on ESP32
-#define TOUCH_CHANNEL_ID 8
+constexpr int TOUCH_CHANNEL_ID = 8;
 
-// Global handles for the new touch sensor driver
-static touch_sensor_handle_t s_sens_handle = NULL;
-static touch_channel_handle_t s_chan_handle = NULL;
-
-#define TOUCH_HOLD_MS 2000
-#define DOUBLE_TAP_WINDOW_MS 500  // Window for second tap to count as double-tap
-#define MIN_TAP_DURATION_MS 20    // Minimum to register as a tap at all
-
-typedef enum {
-  STATE_IDLE,
-  STATE_TOUCHING,
-  STATE_WAIT_FOR_DOUBLE_TAP,
-  STATE_HOLD_FIRED
-} touch_fsm_state_t;
+constexpr uint32_t TOUCH_HOLD_MS = 2000;
+constexpr uint32_t DOUBLE_TAP_WINDOW_MS = 500;
+constexpr uint32_t MIN_TAP_DURATION_MS = 20;
 
 // Adaptive baseline tracking parameters
-#define BASELINE_UPDATE_INTERVAL_MS 200   // Update baseline every 200ms
-#define BASELINE_ALPHA 0.15f              // Faster adaptation (15% new, 85% old)
-#define BASELINE_ALPHA_FAST 0.5f          // Fast adaptation during warmup
-#define WARMUP_PERIOD_MS 5000             // Use fast adaptation for first 5 seconds
-#define TOUCH_DROP_THRESHOLD 35           // Touch must drop at least this much from baseline
+constexpr uint32_t BASELINE_UPDATE_INTERVAL_MS = 200;
+constexpr float BASELINE_ALPHA = 0.15f;
+constexpr float BASELINE_ALPHA_FAST = 0.5f;
+constexpr uint32_t WARMUP_PERIOD_MS = 5000;
+constexpr int16_t TOUCH_DROP_THRESHOLD = 35;
 
-typedef struct {
-  uint16_t threshold;
-  uint32_t debounce_ms;
-  bool initialized;
-  uint16_t baseline;
-  float adaptive_baseline;  // Floating point for smooth adaptation
-  uint32_t last_baseline_update;
-  uint32_t init_time;       // Time of initialization for warmup period
-  touch_fsm_state_t state;
-  uint32_t touch_start_time;
-  uint32_t release_time;
-  uint32_t last_event_time;
-  bool is_late_tap;  // True if current touch was too late for double-tap (will be swallowed)
-} touch_state_t;
+// Global handles for the touch sensor driver
+touch_sensor_handle_t s_sens_handle = nullptr;
+touch_channel_handle_t s_chan_handle = nullptr;
 
-static touch_state_t g_touch = {.threshold = TOUCH_THRESHOLD_DEFAULT,
-                                .debounce_ms = TOUCH_DEBOUNCE_MS,
-                                .initialized = false,
-                                .baseline = 0,
-                                .adaptive_baseline = 0,
-                                .last_baseline_update = 0,
-                                .init_time = 0,
-                                .state = STATE_IDLE,
-                                .touch_start_time = 0,
-                                .release_time = 0,
-                                .last_event_time = 0,
-                                .is_late_tap = false};
+enum class FsmState : uint8_t {
+  IDLE,
+  TOUCHING,
+  WAIT_FOR_DOUBLE_TAP,
+  HOLD_FIRED
+};
 
-static uint32_t get_time_ms(void) {
-  return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+struct TouchState {
+  uint16_t threshold = TOUCH_THRESHOLD_DEFAULT;
+  uint32_t debounce_ms = TOUCH_DEBOUNCE_MS;
+  bool initialized = false;
+  uint16_t baseline = 0;
+  float adaptive_baseline = 0;
+  uint32_t last_baseline_update = 0;
+  uint32_t init_time = 0;
+  FsmState state = FsmState::IDLE;
+  uint32_t touch_start_time = 0;
+  uint32_t release_time = 0;
+  uint32_t last_event_time = 0;
+  bool is_late_tap = false;
+};
+
+TouchState g_touch;
+
+uint32_t get_time_ms() {
+  return static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
-static uint16_t read_touch_filtered(void) {
+uint16_t read_touch_filtered() {
   uint32_t data = 0;
   esp_err_t ret = touch_channel_read_data(s_chan_handle, TOUCH_CHAN_DATA_TYPE_SMOOTH, &data);
   if (ret != ESP_OK) {
     ESP_LOGW(TAG, "Failed to read smooth data: %s", esp_err_to_name(ret));
     return 65535;
   }
-  return (uint16_t)data;
+  return static_cast<uint16_t>(data);
 }
+
+}  // namespace
 
 // Touch pad on Tidbyt Gen 2: GPIO33 (Touch Channel 8)
 // Based on ESPHome configuration: https://community.home-assistant.io/t/esphome-on-tidbyt-gen-2/830367
@@ -90,7 +83,7 @@ esp_err_t touch_control_init(void) {
   ESP_LOGI(TAG, "Initializing touch control on GPIO33...");
 
   // Step 1: Create controller with sample config
-  // Voltage settings equivalent to legacy: HVOLT=2.7V, LVOLT=0.5V, ATTEN=1V → H=1.7V, L=0.5V
+  // Voltage settings equivalent to legacy: HVOLT=2.7V, LVOLT=0.5V, ATTEN=1V -> H=1.7V, L=0.5V
   touch_sensor_sample_config_t sample_cfg = TOUCH_SENSOR_V1_DEFAULT_SAMPLE_CONFIG(
       5.0, TOUCH_VOLT_LIM_L_0V5, TOUCH_VOLT_LIM_H_1V7);
   touch_sensor_config_t sens_cfg = TOUCH_SENSOR_DEFAULT_BASIC_CONFIG(1, &sample_cfg);
@@ -102,7 +95,7 @@ esp_err_t touch_control_init(void) {
 
   // Step 2: Register channel 8 (GPIO33)
   touch_channel_config_t chan_cfg = {
-      .abs_active_thresh = {0},  // We use software adaptive threshold, not hardware
+      .abs_active_thresh = {0},
       .charge_speed = TOUCH_CHARGE_SPEED_7,
       .init_charge_volt = TOUCH_INIT_CHARGE_VOLT_DEFAULT,
       .group = TOUCH_CHAN_TRIG_GROUP_BOTH,
@@ -143,7 +136,7 @@ esp_err_t touch_control_init(void) {
   touch_control_calibrate();
 
   g_touch.initialized = true;
-  g_touch.state = STATE_IDLE;
+  g_touch.state = FsmState::IDLE;
   g_touch.init_time = get_time_ms();
 
   ESP_LOGI(TAG, "Touch control ready (GPIO33)");
@@ -162,11 +155,11 @@ touch_event_t touch_control_check(void) {
 
   // Initialize adaptive baseline on first read
   if (g_touch.adaptive_baseline == 0) {
-    g_touch.adaptive_baseline = (float)value;
+    g_touch.adaptive_baseline = static_cast<float>(value);
   }
 
   // Calculate delta from adaptive baseline (positive = finger touching = value dropped)
-  int16_t delta = (int16_t)g_touch.adaptive_baseline - (int16_t)value;
+  int16_t delta = static_cast<int16_t>(g_touch.adaptive_baseline) - static_cast<int16_t>(value);
 
   // Touch detected if value dropped significantly from adaptive baseline
   bool is_touched = (delta >= TOUCH_DROP_THRESHOLD);
@@ -177,7 +170,7 @@ touch_event_t touch_control_check(void) {
   if (!is_touched && (now - g_touch.last_baseline_update >= BASELINE_UPDATE_INTERVAL_MS)) {
     bool in_warmup = (now - g_touch.init_time) < WARMUP_PERIOD_MS;
     float alpha = in_warmup ? BASELINE_ALPHA_FAST : BASELINE_ALPHA;
-    g_touch.adaptive_baseline = (alpha * (float)value) +
+    g_touch.adaptive_baseline = (alpha * static_cast<float>(value)) +
                                  ((1.0f - alpha) * g_touch.adaptive_baseline);
     g_touch.last_baseline_update = now;
   }
@@ -192,7 +185,7 @@ touch_event_t touch_control_check(void) {
              value, g_touch.adaptive_baseline, delta);
     ESP_LOGI(TAG, "Touch threshold: %d drop, Touched: %s",
              TOUCH_DROP_THRESHOLD, is_touched ? "YES" : "NO");
-    ESP_LOGI(TAG, "State: %d", g_touch.state);
+    ESP_LOGI(TAG, "State: %d", static_cast<int>(g_touch.state));
     ESP_LOGI(TAG, "========================================");
     last_debug = now;
   }
@@ -201,72 +194,68 @@ touch_event_t touch_control_check(void) {
   touch_event_t event = TOUCH_EVENT_NONE;
 
   switch (g_touch.state) {
-    case STATE_IDLE:
+    case FsmState::IDLE:
       if (is_touched) {
-        g_touch.state = STATE_TOUCHING;
+        g_touch.state = FsmState::TOUCHING;
         g_touch.touch_start_time = now;
-        g_touch.is_late_tap = false;  // Fresh tap from idle
+        g_touch.is_late_tap = false;
       }
       break;
 
-    case STATE_TOUCHING:
+    case FsmState::TOUCHING:
       if (!is_touched) {
         uint32_t duration = now - g_touch.touch_start_time;
 
         if (duration >= TOUCH_HOLD_MS) {
-          g_touch.state = STATE_IDLE;
+          g_touch.state = FsmState::IDLE;
         } else if (g_touch.is_late_tap) {
-          // Late tap (came after double-tap window expired) - swallow it
           ESP_LOGI(TAG, "Late tap swallowed (%ldms) - no skip", duration);
-          g_touch.state = STATE_IDLE;
+          g_touch.state = FsmState::IDLE;
         } else if (duration >= MIN_TAP_DURATION_MS) {
           g_touch.release_time = now;
-          g_touch.state = STATE_WAIT_FOR_DOUBLE_TAP;
+          g_touch.state = FsmState::WAIT_FOR_DOUBLE_TAP;
         } else {
-          g_touch.state = STATE_IDLE;
+          g_touch.state = FsmState::IDLE;
         }
       } else {
         uint32_t duration = now - g_touch.touch_start_time;
         if (duration >= TOUCH_HOLD_MS) {
           event = TOUCH_EVENT_HOLD;
-          g_touch.state = STATE_HOLD_FIRED;
+          g_touch.state = FsmState::HOLD_FIRED;
           g_touch.last_event_time = now;
           ESP_LOGI(TAG, "HOLD detected");
         }
       }
       break;
 
-    case STATE_WAIT_FOR_DOUBLE_TAP:
+    case FsmState::WAIT_FOR_DOUBLE_TAP:
       if (is_touched) {
         uint32_t gap = now - g_touch.release_time;
         if (gap <= DOUBLE_TAP_WINDOW_MS) {
-          // Second tap in time - double-tap!
           event = TOUCH_EVENT_DOUBLE_TAP;
           g_touch.last_event_time = now;
           g_touch.is_late_tap = false;
           ESP_LOGI(TAG, "DOUBLE-TAP detected");
         } else {
-          // Second tap came too late - mark it so it gets swallowed on release
           g_touch.is_late_tap = true;
-          ESP_LOGI(TAG, "Late second tap (gap %ldms > %dms)", gap, DOUBLE_TAP_WINDOW_MS);
+          ESP_LOGI(TAG, "Late second tap (gap %ldms > %ldms)", gap, static_cast<long>(DOUBLE_TAP_WINDOW_MS));
         }
-        g_touch.state = STATE_TOUCHING;
+        g_touch.state = FsmState::TOUCHING;
         g_touch.touch_start_time = now;
       } else {
         uint32_t wait_time = now - g_touch.release_time;
         if (wait_time > DOUBLE_TAP_WINDOW_MS) {
-          // No second tap came - this was a single tap
           event = TOUCH_EVENT_TAP;
           g_touch.last_event_time = now;
-          g_touch.state = STATE_IDLE;
+          g_touch.state = FsmState::IDLE;
           ESP_LOGI(TAG, "TAP detected (single)");
         }
       }
       break;
 
-    case STATE_HOLD_FIRED:
+    case FsmState::HOLD_FIRED:
       if (!is_touched) {
-        g_touch.state = STATE_IDLE;
+        g_touch.state = FsmState::IDLE;
       }
       break;
   }
@@ -279,18 +268,18 @@ void touch_control_calibrate(void) {
 
   // Match official Tidbyt HDK: use maximum of 3 readings
   uint16_t max_value = 0;
-  const int samples = 3;
+  constexpr int samples = 3;
 
   for (int i = 0; i < samples; i++) {
     uint16_t val = read_touch_filtered();
     if (val > max_value) {
       max_value = val;
     }
-    vTaskDelay(pdMS_TO_TICKS(100));  // 100ms between samples like HDK
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 
   g_touch.baseline = max_value;
-  g_touch.adaptive_baseline = (float)max_value;
+  g_touch.adaptive_baseline = static_cast<float>(max_value);
 
   ESP_LOGI(TAG, "Baseline (max of %d samples): %d", samples, g_touch.baseline);
   ESP_LOGI(TAG, "Using adaptive tracking + delta threshold: %d",
@@ -301,7 +290,7 @@ void touch_control_debug_all_pads(void) {
   ESP_LOGI(TAG, "=== Touch Control Debug ===");
 
   uint16_t current = read_touch_filtered();
-  int16_t delta = (int16_t)g_touch.adaptive_baseline - (int16_t)current;
+  int16_t delta = static_cast<int16_t>(g_touch.adaptive_baseline) - static_cast<int16_t>(current);
 
   ESP_LOGI(TAG, "Main pad (GPIO33): Channel %d", TOUCH_CHANNEL_ID);
   ESP_LOGI(TAG, "Current: %d, Adaptive baseline: %.0f", current, g_touch.adaptive_baseline);
@@ -318,13 +307,13 @@ uint16_t touch_control_get_threshold(void) { return g_touch.threshold; }
 
 void touch_control_set_debounce(uint32_t ms) {
   g_touch.debounce_ms = ms;
-  ESP_LOGI(TAG, "Debounce set to: %d ms", ms);
+  ESP_LOGI(TAG, "Debounce set to: %ld ms", static_cast<long>(ms));
 }
 
 uint16_t touch_control_read_raw(void) {
   uint32_t data = 0;
   touch_channel_read_data(s_chan_handle, TOUCH_CHAN_DATA_TYPE_RAW, &data);
-  return (uint16_t)data;
+  return static_cast<uint16_t>(data);
 }
 
 bool touch_control_is_initialized(void) { return g_touch.initialized; }

@@ -16,7 +16,7 @@ file(GLOB_RECURSE MAIN_SRCS "*.cpp" "*.c")
 
 # Conditionally include touch_control.c only for Tidbyt Gen2
 if(NOT CONFIG_BOARD_TIDBYT_GEN2)
-    list(REMOVE_ITEM MAIN_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/touch_control.c")
+    list(REMOVE_ITEM MAIN_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/touch_control.cpp")
 endif()
 
 idf_component_register(SRCS ${MAIN_SRCS}

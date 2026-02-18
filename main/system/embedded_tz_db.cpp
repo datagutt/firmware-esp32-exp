@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include <cstdio>
 #include "embedded_tz_db.h"
 
 /**
@@ -11,10 +11,12 @@ typedef struct {
     unsigned char hash;       // 8-bit hash of the alias name
 } embeddedTzAlias_t;
 
-static const char* TZ_DATA_VERS = "2025b-01";
+namespace {
+
+const char* TZ_DATA_VERS = "2025b-01";
 
 #if TZ_DB_USE_SHORT_LIST
-static const embeddedTz_t embedded_tz_db_zones[TZ_DB_NUM_ZONES] = {
+const embeddedTz_t embedded_tz_db_zones[TZ_DB_NUM_ZONES] = {
   {"Etc/GMT+12", "<-12>12"},
   {"Etc/GMT+11", "<-11>11"},
   {"America/Adak", "HST10HDT,M3.2.0,M11.1.0"},
@@ -160,7 +162,7 @@ static const embeddedTz_t embedded_tz_db_zones[TZ_DB_NUM_ZONES] = {
 /** This hash table allows for faster lookup of the timezone names. Timezones are not in alphabetical order.
  *  Timezone names are converted to lower case and then summed. The 8 bit sum is stored here.
  **/
-static const unsigned char embedded_tz_db_hashTable[TZ_DB_NUM_ZONES] = {
+const unsigned char embedded_tz_db_hashTable[TZ_DB_NUM_ZONES] = {
   65,
   64,
   146,
@@ -304,7 +306,7 @@ static const unsigned char embedded_tz_db_hashTable[TZ_DB_NUM_ZONES] = {
 };
 #else
 //Full List
-static const embeddedTz_t embedded_tz_db_zones[TZ_DB_NUM_ZONES] = {
+const embeddedTz_t embedded_tz_db_zones[TZ_DB_NUM_ZONES] = {
   {"Europe/Andorra", "CET-1CEST,M3.5.0,M10.5.0/3"},
   {"Asia/Dubai", "<+04>-4"},
   {"Asia/Kabul", "<+0430>-4:30"},
@@ -737,7 +739,7 @@ static const embeddedTz_t embedded_tz_db_zones[TZ_DB_NUM_ZONES] = {
 /** This hash table allows for faster lookup of the timezone names. Timezones are not in alphabetical order.
  *  Timezone names are converted to lower case and then summed. The 8 bit sum is stored here.
  **/
-static const unsigned char embedded_tz_db_hashTable[TZ_DB_NUM_ZONES] = {
+const unsigned char embedded_tz_db_hashTable[TZ_DB_NUM_ZONES] = {
   166,
   210,
   220,
@@ -1169,8 +1171,7 @@ static const unsigned char embedded_tz_db_hashTable[TZ_DB_NUM_ZONES] = {
 #endif
 
 #if TZ_DB_INCLUDE_ALIAS_LIST
-/** Alias table with hash values for fast lookup */
-static const embeddedTzAlias_t embedded_tz_db_aliases[TZ_DB_NUM_ALIAS] = {
+const embeddedTzAlias_t embedded_tz_db_aliases[TZ_DB_NUM_ALIAS] = {
   { "GMT", 423, 72 },
   { "Australia/ACT", 36, 45 },
   { "Australia/LHI", 32, 50 },
@@ -1318,7 +1319,7 @@ static const embeddedTzAlias_t embedded_tz_db_aliases[TZ_DB_NUM_ALIAS] = {
 /**
  * Convert to a safe char representation. Ignore case and spaces.
  **/
-static char safeChar(char c) {
+char safeChar(char c) {
     if (c == ' ') return '_';
     if ((c >= 'A') && (c <= 'Z')) return c | 0x20;
     return c;
@@ -1328,7 +1329,7 @@ static char safeChar(char c) {
  * Create an 8 bit hash of the timezone name.
  * Timezones are not in alphabetical order so the hash table is used to make lookups faster.
  **/
-static unsigned char createHash(const char* name) {
+unsigned char createHash(const char* name) {
     unsigned char hash = 0;
     while (*name != '\0') {
         hash += safeChar(*(name++));
@@ -1345,7 +1346,7 @@ static unsigned char createHash(const char* name) {
  *         < 0 if other comes before target alphabetically
  *         (we don't expect NULL arguments, but, -1 if either is NULL)
  **/
-static int tz_name_cmp(const char* target, const char* other) {
+int tz_name_cmp(const char* target, const char* other) {
     if (!target || !other) {
         return -1;
     }
@@ -1360,6 +1361,7 @@ static int tz_name_cmp(const char* target, const char* other) {
     return safeChar(*target) - safeChar(*other);
 }
 
+}  // namespace
 
 const embeddedTz_t* tz_db_getTimezone(const char* name) {
     unsigned char hash = createHash(name);
@@ -1384,12 +1386,12 @@ const embeddedTz_t* tz_db_getTimezone(const char* name) {
         }
     }
 #endif
-    return NULL;          // No match found
+    return nullptr;
 }
 
 const char* tz_db_get_posix_str(const char* name) {
     const embeddedTz_t* tz = tz_db_getTimezone(name);
-    return tz ? tz->rule : NULL;
+    return tz ? tz->rule : nullptr;
 }
 
 const char* tz_db_get_version() {
