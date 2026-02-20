@@ -14,6 +14,10 @@
 #include "embedded_tz_db.h"
 #include "api_validation.h"
 #include "device_temperature.h"
+#include "display.h"
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+extern void touch_on_brightness_set(uint8_t brightness);
+#endif
 #include "diag_event_ring.h"
 #include "heap_monitor.h"
 #include "http_server.h"
@@ -284,6 +288,7 @@ esp_err_t system_config_get_handler(httpd_req_t* req) {
   cJSON_AddStringToObject(root, "hostname", cfg.hostname);
   cJSON_AddBoolToObject(root, "diag_events_enabled",
                         diag_event_ring_is_enabled());
+  cJSON_AddNumberToObject(root, "brightness", display_get_brightness());
 
   char* json = cJSON_PrintUnformatted(root);
   cJSON_Delete(root);
@@ -321,7 +326,8 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
   }
 
   const char* const kAllowedKeys[] = {"auto_timezone", "timezone", "ntp_server",
-                                      "hostname", "diag_events_enabled"};
+                                      "hostname", "diag_events_enabled",
+                                      "brightness"};
   char validation_err[128] = {0};
   if (!api_validate_no_unknown_keys(json, kAllowedKeys,
                                     sizeof(kAllowedKeys) /
@@ -344,6 +350,8 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
   bool has_hostname = false;
   bool diag_enabled = false;
   bool has_diag_enabled = false;
+  int brightness_value = 0;
+  bool has_brightness = false;
 
   if (!api_validate_optional_bool(json, "auto_timezone", &auto_tz_value,
                                   &has_auto_tz, validation_err,
@@ -359,7 +367,11 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
                                     validation_err, sizeof(validation_err)) ||
       !api_validate_optional_bool(json, "diag_events_enabled", &diag_enabled,
                                   &has_diag_enabled, validation_err,
-                                  sizeof(validation_err))) {
+                                  sizeof(validation_err)) ||
+      !api_validate_optional_int(json, "brightness", DISPLAY_MIN_BRIGHTNESS,
+                                 DISPLAY_MAX_BRIGHTNESS, &brightness_value,
+                                 &has_brightness, validation_err,
+                                 sizeof(validation_err))) {
     diag_event_log("WARN", "json_validation_error", -1, validation_err);
     cJSON_Delete(json);
     httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, validation_err);
@@ -376,6 +388,12 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
     cfg.hostname[MAX_HOSTNAME_LEN] = '\0';
     config_set(&cfg);
     wifi_set_hostname(hostname_value);
+  }
+  if (has_brightness) {
+    display_set_brightness(static_cast<uint8_t>(brightness_value));
+#ifdef CONFIG_BOARD_TIDBYT_GEN2
+    touch_on_brightness_set(static_cast<uint8_t>(brightness_value));
+#endif
   }
 
   cJSON_Delete(json);
