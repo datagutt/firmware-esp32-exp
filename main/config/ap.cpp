@@ -33,117 +33,18 @@ constexpr int OTA_BUFFER_SIZE = 1024;
 TaskHandle_t s_dns_task_handle = nullptr;
 TimerHandle_t s_ap_shutdown_timer = nullptr;
 
-// HTML Parts for chunked response
-const char* s_html_part1 =
-    "<!DOCTYPE html>"
-    "<html>"
-    "<head>"
-    "<title>Tronbyt WiFi Setup</title>"
-    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<style>"
-    "body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }"
-    "h1 { color: #333; }"
-    ".form-container { max-width: 400px; margin: 0 auto; }"
-    ".form-group { margin-bottom: 15px; }"
-    "label { display: block; margin-bottom: 5px; font-weight: bold; }"
-    "input[type='text'], input[type='password'] { width: 100%; padding: 8px; "
-    "box-sizing: border-box; }"
-    "button { background-color: #4CAF50; color: white; padding: 10px 15px; "
-    "border: none; cursor: pointer; }"
-    "button:hover { background-color: #45a049; }"
-    ".networks { margin-top: 20px; }"
-    "</style>"
-    "</head>"
-    "<body>"
-    "<div class='form-container'>"
-    "<h1>Tronbyt WiFi Setup</h1>"
-    "<form action='/save' method='post' "
-    "enctype='application/x-www-form-urlencoded'>"
-    "<div class='form-group'>"
-    "<label for='ssid'>WiFi Network Name (2.4Ghz Only) :</label>"
-    "<input type='text' id='ssid' name='ssid' maxlength='32'>"
-    "</div>"
-    "<div class='form-group'>"
-    "<label for='password'>WiFi Password:</label>"
-    "<input type='password' id='password' name='password' maxlength='64'>"
-    "</div>"
-    "<div class='form-group'>"
-    "<label for='image_url'>Image URL:</label>"
-    "<input type='text' id='image_url' name='image_url' maxlength='128' "
-    "value='";
-
-const char* s_html_part2 =
-    "'>"
-    "</div>";
+extern const char setup_html_start[] asm("_binary_setup_html_start");
+extern const char success_html_start[] asm("_binary_success_html_start");
 
 #if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3
-const char* s_html_part3_start =
+constexpr const char* SWAP_COLORS_FMT =
     "<div class='form-group'>"
     "<label>"
-    "<input type='checkbox' id='swap_colors' name='swap_colors' value='1' ";
-
-const char* s_html_part3_end =
-    ">"
+    "<input type='checkbox' id='swap_colors' name='swap_colors' value='1' %s>"
     " Swap Colors (Gen1/S3 only - requires reboot)"
     "</label>"
     "</div>";
 #endif
-
-const char* s_html_part4 =
-    "<button type='submit'>Save and Connect</button>"
-    "</form>"
-    "<hr>"
-    "<h3>Firmware Update</h3>"
-    "<div class='form-group'>"
-    "<input type='file' id='fw_file' accept='.bin'>"
-    "</div>"
-    "<button id='upd_btn' onclick='uploadFirmware()'>Update Firmware</button>"
-    "<div id='progress' style='margin-top: 10px;'></div>"
-    "<script>"
-    "function uploadFirmware() {"
-    "var f=document.getElementById('fw_file').files[0];"
-    "if(!f){alert('Select file');return;}"
-    "var "
-    "b=document.getElementById('upd_btn');b.disabled=true;b.innerText='"
-    "Uploading...';"
-    "var x=new XMLHttpRequest();x.open('POST','/update',true);"
-    "x.upload.onprogress=function(e){if(e.lengthComputable){document."
-    "getElementById('progress').innerText='Upload: "
-    "'+((e.loaded/e.total)*100).toFixed(0)+'%';}};"
-    "x.onload=function(){if(x.status==200){document.getElementById('progress')."
-    "innerText='Success! "
-    "Rebooting...';}else{document.getElementById('progress').innerText='Failed:"
-    " '+x.statusText;b.disabled=false;b.innerText='Update Firmware';}};"
-    "x.onerror=function(){document.getElementById('progress').innerText='Error'"
-    ";b.disabled=false;b.innerText='Update Firmware';};"
-    "x.send(f);"
-    "}"
-    "</script>"
-    "</div>"
-    "</body>"
-    "</html>";
-
-const char* s_success_html =
-    "<!DOCTYPE html>"
-    "<html>"
-    "<head>"
-    "<title>WiFi Configuration Saved</title>"
-    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-    "<style>"
-    "body { font-family: Arial, sans-serif; margin: 0; padding: 20px; "
-    "text-align: center; }"
-    "h1 { color: #4CAF50; }"
-    "p { margin-bottom: 20px; }"
-    "</style>"
-    "</head>"
-    "<body>"
-    "<h1>Configuration Saved!</h1>"
-    "<p>WiFi credentials and image URL have been saved.</p>"
-    "<p>The device will now reboot and attempt to connect to the WiFi "
-    "network.</p>"
-    "<p>You can close this page.</p>"
-    "</body>"
-    "</html>";
 
 struct __attribute__((packed)) DnsHeader {
   uint16_t id;
@@ -259,53 +160,26 @@ void stop_dns_server() {
 
 esp_err_t root_handler(httpd_req_t* req) {
   auto cfg = config_get();
-  const char* image_url = (cfg.image_url[0] != '\0') ? cfg.image_url : nullptr;
-  ESP_LOGI(TAG, "Serving root page (chunked)");
-
-  httpd_resp_set_type(req, "text/html");
-
-  esp_err_t ret = ESP_OK;
-
-  do {
-    if ((ret = httpd_resp_send_chunk(req, s_html_part1,
-                                     HTTPD_RESP_USE_STRLEN)) != ESP_OK)
-      break;
-
-    if (image_url && image_url[0]) {
-      if ((ret = httpd_resp_send_chunk(req, image_url,
-                                       HTTPD_RESP_USE_STRLEN)) != ESP_OK)
-        break;
-    }
-
-    if ((ret = httpd_resp_send_chunk(req, s_html_part2,
-                                     HTTPD_RESP_USE_STRLEN)) != ESP_OK)
-      break;
-
+  const char* image_url = cfg.image_url[0] ? cfg.image_url : "";
+  const char* swap_section = "";
 #if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3
-    if ((ret = httpd_resp_send_chunk(req, s_html_part3_start,
-                                     HTTPD_RESP_USE_STRLEN)) != ESP_OK)
-      break;
-    if (cfg.swap_colors) {
-      if ((ret = httpd_resp_send_chunk(req, "checked",
-                                       HTTPD_RESP_USE_STRLEN)) != ESP_OK)
-        break;
-    }
-    if ((ret = httpd_resp_send_chunk(req, s_html_part3_end,
-                                     HTTPD_RESP_USE_STRLEN)) != ESP_OK)
-      break;
+  char swap_buf[192];
+  snprintf(swap_buf, sizeof(swap_buf), SWAP_COLORS_FMT,
+           cfg.swap_colors ? "checked" : "");
+  swap_section = swap_buf;
 #endif
 
-    if ((ret = httpd_resp_send_chunk(req, s_html_part4,
-                                     HTTPD_RESP_USE_STRLEN)) != ESP_OK)
-      break;
-
-    ret = httpd_resp_send_chunk(req, nullptr, 0);
-  } while (false);
-
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to send response chunk: %s", esp_err_to_name(ret));
+  ESP_LOGI(TAG, "Serving root page");
+  int len = snprintf(nullptr, 0, setup_html_start, image_url, swap_section);
+  auto* buf = static_cast<char*>(malloc(len + 1));
+  if (!buf) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                               "Out of memory");
   }
-
+  snprintf(buf, len + 1, setup_html_start, image_url, swap_section);
+  httpd_resp_set_type(req, "text/html");
+  esp_err_t ret = httpd_resp_send(req, buf, len);
+  free(buf);
   return ret;
 }
 
@@ -419,7 +293,7 @@ esp_err_t save_handler(httpd_req_t* req) {
   free(buf);
 
   httpd_resp_set_type(req, "text/html");
-  httpd_resp_send(req, s_success_html, strlen(s_success_html));
+  httpd_resp_send(req, success_html_start, HTTPD_RESP_USE_STRLEN);
 
   ESP_LOGI(TAG, "Configuration saved - rebooting...");
   gfx_safe_restart();

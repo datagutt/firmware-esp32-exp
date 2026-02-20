@@ -20,7 +20,9 @@ if(NOT CONFIG_BOARD_TIDBYT_GEN2)
 endif()
 
 idf_component_register(SRCS ${MAIN_SRCS}
-                       INCLUDE_DIRS "." "display" "webp_player" "network" "config" "system" "scheduler" "startup")
+                       INCLUDE_DIRS "." "display" "webp_player" "network" "config" "system" "scheduler" "startup"
+                       EMBED_TXTFILES "config/html/setup.html"
+                                      "config/html/success.html")
 
 idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=esp_getaddrinfo" APPEND)
 

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Tronbyt WiFi Setup</title>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<style>
+body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+h1 { color: #333; }
+.form-container { max-width: 400px; margin: 0 auto; }
+.form-group { margin-bottom: 15px; }
+label { display: block; margin-bottom: 5px; font-weight: bold; }
+input[type='text'], input[type='password'] { width: 100%%; padding: 8px; box-sizing: border-box; }
+button { background-color: #4CAF50; color: white; padding: 10px 15px; border: none; cursor: pointer; }
+button:hover { background-color: #45a049; }
+.networks { margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class='form-container'>
+<h1>Tronbyt WiFi Setup</h1>
+<form action='/save' method='post' enctype='application/x-www-form-urlencoded'>
+<div class='form-group'>
+<label for='ssid'>WiFi Network Name (2.4Ghz Only) :</label>
+<input type='text' id='ssid' name='ssid' maxlength='32'>
+</div>
+<div class='form-group'>
+<label for='password'>WiFi Password:</label>
+<input type='password' id='password' name='password' maxlength='64'>
+</div>
+<div class='form-group'>
+<label for='image_url'>Image URL:</label>
+<input type='text' id='image_url' name='image_url' maxlength='128' value='%s'>
+</div>%s
+<button type='submit'>Save and Connect</button>
+</form>
+<hr>
+<h3>Firmware Update</h3>
+<div class='form-group'>
+<input type='file' id='fw_file' accept='.bin'>
+</div>
+<button id='upd_btn' onclick='uploadFirmware()'>Update Firmware</button>
+<div id='progress' style='margin-top: 10px;'></div>
+<script>
+function uploadFirmware() {
+  var f = document.getElementById('fw_file').files[0];
+  if (!f) { alert('Select file'); return; }
+  var b = document.getElementById('upd_btn');
+  b.disabled = true;
+  b.innerText = 'Uploading...';
+  var x = new XMLHttpRequest();
+  x.open('POST', '/update', true);
+  x.upload.onprogress = function(e) {
+    if (e.lengthComputable) {
+      document.getElementById('progress').innerText = 'Upload: ' + ((e.loaded / e.total) * 100).toFixed(0) + '%%';
+    }
+  };
+  x.onload = function() {
+    if (x.status == 200) {
+      document.getElementById('progress').innerText = 'Success! Rebooting...';
+    } else {
+      document.getElementById('progress').innerText = 'Failed: ' + x.statusText;
+      b.disabled = false;
+      b.innerText = 'Update Firmware';
+    }
+  };
+  x.onerror = function() {
+    document.getElementById('progress').innerText = 'Error';
+    b.disabled = false;
+    b.innerText = 'Update Firmware';
+  };
+  x.send(f);
+}
+</script>
+</div>
+</body>
+</html>
