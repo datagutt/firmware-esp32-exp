@@ -2,7 +2,6 @@
 
 #include <hub75.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -24,30 +23,16 @@ static uint8_t _brightness = (CONFIG_HUB75_BRIGHTNESS * 100) / 255;
 static const char *TAG = "display";
 
 #if CONFIG_HUB75_PANEL_WIDTH == 128 && CONFIG_HUB75_PANEL_HEIGHT == 64
-static uint32_t *_scaled_buffer = NULL;
-static bool _scaled_buffer_in_psram = false;
+// Batched upscale buffer: 4 source rows → 8 output rows per draw_pixels call.
+// 4 KB in BSS (internal SRAM) replaces a 32 KB PSRAM heap allocation while
+// keeping the call count low (8 calls vs 1 original vs 64 in the row-at-a-time
+// approach).  draw_pixels reads from fast internal SRAM instead of PSRAM.
+constexpr int kUpscaleBatchSrcRows = 4;
+constexpr int kUpscaleBatchDstRows = kUpscaleBatchSrcRows * 2;
+static uint32_t _scale_buf[128 * kUpscaleBatchDstRows];
 #endif
 
 int display_initialize(void) {
-#if CONFIG_HUB75_PANEL_WIDTH == 128 && CONFIG_HUB75_PANEL_HEIGHT == 64
-  if (_scaled_buffer == NULL) {
-    constexpr size_t kScaledBufferBytes = 128 * 64 * sizeof(uint32_t);
-    _scaled_buffer = static_cast<uint32_t*>(heap_caps_malloc(
-        kScaledBufferBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    _scaled_buffer_in_psram = (_scaled_buffer != NULL);
-    if (_scaled_buffer == NULL) {
-      _scaled_buffer = static_cast<uint32_t*>(heap_caps_malloc(
-          kScaledBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    }
-    if (_scaled_buffer == NULL) {
-      ESP_LOGE(TAG, "Failed to allocate scaled 128x64 buffer");
-      return 1;
-    }
-    ESP_LOGI(TAG, "Scaled buffer allocated in %s",
-             _scaled_buffer_in_psram ? "PSRAM" : "internal RAM");
-  }
-#endif
-
   // Get swap_colors setting
   bool swap_colors = config_get().swap_colors;
 
@@ -324,23 +309,28 @@ bool display_wait_frame(uint32_t timeout_ms) {
 void display_draw_buffer(const uint8_t *pix, int width, int height) {
 #if CONFIG_HUB75_PANEL_WIDTH == 128 && CONFIG_HUB75_PANEL_HEIGHT == 64
   if (width == 64 && height == 32) {
-    // Optimize scale-by-2 drawing (specifically for 64x32 -> 128x64)
+    // Batched 2x upscale: process kUpscaleBatchSrcRows source rows at a
+    // time into a static internal-SRAM buffer, then hand the batch to
+    // draw_pixels in a single call.  This keeps the call count low (8)
+    // while reading from fast SRAM instead of PSRAM.
     const uint32_t *src32 = (const uint32_t *)pix;
-    for (int y = 0; y < height; y++) {
-      uint32_t *dst_row1 = &_scaled_buffer[(y * 2) * 128];
-      uint32_t *dst_row2 = &_scaled_buffer[(y * 2 + 1) * 128];
-      for (int x = 0; x < width; x++) {
-        uint32_t pixel = src32[y * width + x];
-        // Fill 2x2 block
-        dst_row1[x * 2] = pixel;
-        dst_row1[x * 2 + 1] = pixel;
-        dst_row2[x * 2] = pixel;
-        dst_row2[x * 2 + 1] = pixel;
+    for (int batch_y = 0; batch_y < height; batch_y += kUpscaleBatchSrcRows) {
+      for (int y = 0; y < kUpscaleBatchSrcRows; y++) {
+        const uint32_t *src_row = &src32[(batch_y + y) * width];
+        uint32_t *dst_row1 = &_scale_buf[(y * 2) * 128];
+        uint32_t *dst_row2 = &_scale_buf[(y * 2 + 1) * 128];
+        for (int sx = 0; sx < width; sx++) {
+          uint32_t pixel = src_row[sx];
+          dst_row1[sx * 2] = pixel;
+          dst_row1[sx * 2 + 1] = pixel;
+          dst_row2[sx * 2] = pixel;
+          dst_row2[sx * 2 + 1] = pixel;
+        }
       }
+      _matrix->draw_pixels(0, batch_y * 2, 128, kUpscaleBatchDstRows,
+                           (uint8_t *)_scale_buf,
+                           Hub75PixelFormat::RGB888_32, Hub75ColorOrder::BGR);
     }
-
-    _matrix->draw_pixels(0, 0, 128, 64, (uint8_t *)_scaled_buffer,
-                         Hub75PixelFormat::RGB888_32, Hub75ColorOrder::BGR);
     return;
   }
 #endif
