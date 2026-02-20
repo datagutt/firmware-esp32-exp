@@ -12,6 +12,7 @@
 extern "C" {
 #endif
 int display_initialize(void);
+uint8_t display_get_brightness(void);
 void display_set_brightness(uint8_t brightness_pct);
 void display_shutdown(void);
 

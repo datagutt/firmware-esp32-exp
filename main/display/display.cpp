@@ -249,6 +249,8 @@ int display_initialize(void) {
   return 0;
 }
 
+uint8_t display_get_brightness() { return _brightness; }
+
 static inline uint8_t brightness_percent_to_8bit(uint8_t pct) {
   if (pct > 100) pct = 100;
   return (uint8_t)(((uint32_t)pct * 230 + 50) /
