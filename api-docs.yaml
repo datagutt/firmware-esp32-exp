@@ -1,0 +1,307 @@
+openapi: 3.0.3
+info:
+  title: Tronbyt Firmware REST API
+  description: REST API exposed by the Tronbyt ESP32 firmware over Wi-Fi.
+  version: 1.0.0
+
+servers:
+  - url: http://{host}
+    description: Device on local network
+    variables:
+      host:
+        default: tronbyt.local
+
+paths:
+  /api/about:
+    get:
+      summary: Device identity
+      description: Returns the board model, device type, and firmware version.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  model:
+                    type: string
+                    description: Board model identifier.
+                    enum:
+                      - tidbyt-gen1
+                      - tidbyt-gen2
+                      - tronbyt-s3
+                      - tronbyt-s3-wide
+                      - pixoticker
+                      - matrixportal-s3
+                      - unknown
+                    example: tronbyt-s3
+                  type:
+                    type: string
+                    description: Device type (always "tronbyt").
+                    example: tronbyt
+                  version:
+                    type: string
+                    description: Firmware version string.
+                    example: "1.2.3"
+
+  /api/health:
+    get:
+      summary: Health check
+      description: Quick health probe. Returns 200 when Wi-Fi is connected, 503 otherwise.
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+        "503":
+          description: Degraded (Wi-Fi disconnected)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [degraded]
+
+  /api/status:
+    get:
+      summary: Device status
+      description: Detailed device status including heap, loaded images, and temperature.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  firmware_version:
+                    type: string
+                    example: "1.2.3"
+                  mac:
+                    type: string
+                    description: Wi-Fi MAC address.
+                    example: "aa:bb:cc:dd:ee:ff"
+                  free_heap:
+                    type: integer
+                    description: Free internal heap bytes.
+                  free_spiram:
+                    type: integer
+                    description: Free SPI RAM bytes.
+                  min_free_heap:
+                    type: integer
+                    description: All-time minimum free internal heap bytes.
+                  images_loaded:
+                    type: integer
+                    description: Number of images currently loaded.
+                  diag_events_enabled:
+                    type: boolean
+                  temperature_c:
+                    type: number
+                    nullable: true
+                    description: Die temperature in Celsius, or null if unavailable.
+
+  /api/diag:
+    get:
+      summary: Diagnostics
+      description: |
+        Diagnostic snapshot including reboot reason, Wi-Fi stats, heap trend,
+        recent events, and OTA history.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reboot_reason:
+                    type: string
+                    description: Last reset reason.
+                    enum:
+                      - unknown
+                      - poweron
+                      - external
+                      - software
+                      - panic
+                      - interrupt_wdt
+                      - task_wdt
+                      - other_wdt
+                      - deepsleep
+                      - brownout
+                      - sdio
+                      - usb
+                      - jtag
+                      - unmapped
+                  diag_events_enabled:
+                    type: boolean
+                  temperature_c:
+                    type: number
+                    nullable: true
+                  wifi:
+                    type: object
+                    properties:
+                      connected:
+                        type: boolean
+                      connection_given_up:
+                        type: boolean
+                      reconnect_attempts:
+                        type: integer
+                      disconnect_events:
+                        type: integer
+                      health_disconnect_checks:
+                        type: integer
+                  heap_trend:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        uptime_ms:
+                          type: integer
+                        internal_free:
+                          type: integer
+                        internal_min:
+                          type: integer
+                        spiram_free:
+                          type: integer
+                        spiram_min:
+                          type: integer
+                  recent_events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DiagEvent"
+                  ota_history:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DiagEvent"
+
+  /api/system/config:
+    get:
+      summary: Get system configuration
+      description: Returns the current system configuration values.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemConfig"
+    post:
+      summary: Update system configuration
+      description: |
+        Partial update — only the fields present in the request body are changed.
+        Unknown keys are rejected with 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SystemConfig"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+        "400":
+          description: Validation error (unknown key, wrong type, or out-of-range value).
+        "408":
+          description: Request timeout.
+
+  /api/time/zonedb:
+    get:
+      summary: Timezone database
+      description: |
+        Returns the full embedded timezone database as a JSON array.
+        The response is sent using chunked transfer encoding.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      description: IANA timezone name.
+                      example: America/New_York
+                    rule:
+                      type: string
+                      description: POSIX TZ rule string.
+                      example: EST5EDT,M3.2.0,M11.1.0
+
+components:
+  schemas:
+    SystemConfig:
+      type: object
+      description: All fields are optional on POST (partial updates).
+      properties:
+        auto_timezone:
+          type: boolean
+          description: Whether automatic timezone detection is enabled.
+        timezone:
+          type: string
+          description: POSIX TZ string (1-63 chars).
+          minLength: 1
+          maxLength: 63
+          example: EST5EDT,M3.2.0,M11.1.0
+        ntp_server:
+          type: string
+          description: NTP server hostname (1-63 chars).
+          minLength: 1
+          maxLength: 63
+          example: pool.ntp.org
+        hostname:
+          type: string
+          description: mDNS hostname.
+          minLength: 1
+          example: tronbyt
+        diag_events_enabled:
+          type: boolean
+          description: Whether diagnostic event logging is enabled.
+        brightness:
+          type: integer
+          description: Display brightness percentage.
+          minimum: 0
+          maximum: 100
+          example: 50
+
+    DiagEvent:
+      type: object
+      properties:
+        seq:
+          type: integer
+          description: Monotonic sequence number.
+        uptime_ms:
+          type: integer
+          description: Device uptime when the event occurred (milliseconds).
+        level:
+          type: string
+          description: Severity level.
+          example: WARN
+        type:
+          type: string
+          description: Event type tag.
+          example: json_parse_error
+        code:
+          type: integer
+          description: Numeric error code (-1 for unspecified).
+        message:
+          type: string
+          description: Human-readable event message.
