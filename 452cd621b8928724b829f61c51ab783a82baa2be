@@ -1,0 +1,23 @@
+main/display/display.cpp
+  3c8d182fdff98eef 26-32,312-315,317-328,330-332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "452cd621b8928724b829f61c51ab783a82baa2be",
+  "prompts": {
+    "3c8d182fdff98eef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0998ea25-c97a-4fde-817a-4fab2fa94955",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 43,
+      "total_deletions": 53,
+      "accepted_lines": 29,
+      "overriden_lines": 0
+    }
+  }
+}
