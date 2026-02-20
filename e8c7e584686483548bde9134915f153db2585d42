@@ -1,0 +1,29 @@
+main/config/html/setup.html
+  08d84359c70acc2e 1-76
+main/config/html/success.html
+  08d84359c70acc2e 1-18
+main/config/ap.cpp
+  08d84359c70acc2e 36-37,40,43,163-164,166-169,172-177,290
+main/CMakeLists.txt
+  08d84359c70acc2e 24-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "e8c7e584686483548bde9134915f153db2585d42",
+  "prompts": {
+    "08d84359c70acc2e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a4e1e43-c892-433e-8cec-91f93a1dd952",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 114,
+      "total_deletions": 150,
+      "accepted_lines": 113,
+      "overriden_lines": 0
+    }
+  }
+}
