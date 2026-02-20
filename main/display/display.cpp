@@ -312,6 +312,9 @@ void display_shutdown(void) {
 bool display_wait_frame(uint32_t timeout_ms) {
 #ifdef CONFIG_DISPLAY_FRAME_SYNC
   if (_frame_sync_sem == NULL) return false;
+  // Drain any stale tokens so we wait for the NEXT frame boundary,
+  // not one that fired while we were drawing to the back buffer.
+  while (xSemaphoreTake(_frame_sync_sem, 0) == pdTRUE) {}
   return xSemaphoreTake(_frame_sync_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 #else
   return false;
