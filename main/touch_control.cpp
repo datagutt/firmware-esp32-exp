@@ -108,7 +108,10 @@ esp_err_t touch_control_init(void) {
   }
 
   // Step 3: Configure software filter (10ms interval, default IIR filter)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
   touch_sensor_filter_config_t filter_cfg = TOUCH_SENSOR_DEFAULT_FILTER_CONFIG();
+#pragma GCC diagnostic pop
   ret = touch_sensor_config_filter(s_sens_handle, &filter_cfg);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to configure filter: %s", esp_err_to_name(ret));
