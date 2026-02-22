@@ -11,6 +11,7 @@
 #include <esp_system.h>
 #include <esp_tls.h>
 
+#include "nvs_settings.h"
 #include "sdkconfig.h"
 #include "version.h"
 #include "webp_player.h"
@@ -240,6 +241,16 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
   if (esp_http_client_set_header(http, "X-Firmware-Version",
                                  FIRMWARE_VERSION) != ESP_OK) {
     ESP_LOGE(TAG, "Failed to set firmware version header");
+  }
+
+  auto cfg = config_get();
+  char auth_header[MAX_API_KEY_LEN + 8];  // "Bearer " + key
+  if (cfg.api_key[0] != '\0') {
+    snprintf(auth_header, sizeof(auth_header), "Bearer %s", cfg.api_key);
+    if (esp_http_client_set_header(http, "Authorization", auth_header) !=
+        ESP_OK) {
+      ESP_LOGE(TAG, "Failed to set Authorization header");
+    }
   }
 
   esp_err_t err = esp_http_client_perform(http);

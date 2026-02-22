@@ -119,7 +119,7 @@ void process_text_message(const char* json_str) {
                                       "ap_mode",         "prefer_ipv6",
                                       "hostname",        "syslog_addr",
                                       "sntp_server",     "image_url",
-                                      "reboot"};
+                                      "api_key",         "reboot"};
 
   char validation_err[128] = {0};
   if (!api_validate_no_unknown_keys(root, kAllowedKeys,
@@ -149,6 +149,8 @@ void process_text_message(const char* json_str) {
   bool has_sntp_server = false;
   const char* image_url_value = nullptr;
   bool has_image_url = false;
+  const char* api_key_value = nullptr;
+  bool has_api_key = false;
   auto validate_or_abort = [&](bool ok) {
     if (!ok) {
       ESP_LOGW(TAG, "Validation failed: %s", validation_err);
@@ -191,6 +193,10 @@ void process_text_message(const char* json_str) {
     return;
   if (!validate_or_abort(api_validate_optional_string(
           root, "image_url", 0, MAX_URL_LEN, &image_url_value, &has_image_url,
+          validation_err, sizeof(validation_err))))
+    return;
+  if (!validate_or_abort(api_validate_optional_string(
+          root, "api_key", 0, MAX_API_KEY_LEN, &api_key_value, &has_api_key,
           validation_err, sizeof(validation_err))))
     return;
 
@@ -293,6 +299,12 @@ void process_text_message(const char* json_str) {
   if (has_image_url) {
     snprintf(cfg.image_url, sizeof(cfg.image_url), "%s", image_url_value);
     ESP_LOGI(TAG, "Updated image_url to %s", image_url_value);
+    settings_changed = true;
+  }
+
+  if (has_api_key) {
+    snprintf(cfg.api_key, sizeof(cfg.api_key), "%s", api_key_value);
+    ESP_LOGI(TAG, "Updated api_key");
     settings_changed = true;
   }
 

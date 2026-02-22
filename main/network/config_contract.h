@@ -16,6 +16,7 @@ typedef struct {
   char syslog_addr[129];
   char sntp_server[65];
   char image_url[513];
+  char api_key[129];
 } config_contract_state_t;
 
 typedef struct {
@@ -37,6 +38,8 @@ typedef struct {
   const char* sntp_server;
   bool has_image_url;
   const char* image_url;
+  bool has_api_key;
+  const char* api_key;
 } config_contract_patch_t;
 
 bool config_contract_apply_patch(const config_contract_state_t* in_state,

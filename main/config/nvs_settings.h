@@ -17,6 +17,7 @@ extern "C" {
 #define MAX_IP_LEN 64
 #define MAX_SYSLOG_ADDR_LEN 128
 #define MAX_SNTP_SERVER_LEN 64
+#define MAX_API_KEY_LEN 128
 
 typedef struct {
   char ssid[MAX_SSID_LEN + 1];
@@ -25,6 +26,7 @@ typedef struct {
   char syslog_addr[MAX_SYSLOG_ADDR_LEN + 1];
   char sntp_server[MAX_SNTP_SERVER_LEN + 1];
   char image_url[MAX_URL_LEN + 1];
+  char api_key[MAX_API_KEY_LEN + 1];
   bool swap_colors;
   wifi_ps_type_t wifi_power_save;
   bool skip_display_version;

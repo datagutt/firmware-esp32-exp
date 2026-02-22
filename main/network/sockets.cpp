@@ -17,6 +17,7 @@
 #include <freertos/event_groups.h>
 
 #include "display.h"
+#include "nvs_settings.h"
 #include "scheduler.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -48,6 +49,7 @@ struct SocketContext {
   esp_websocket_client_handle_t client = nullptr;
   State state = State::Disconnected;
   char* url = nullptr;
+  char* auth_header = nullptr;
   bool sent_client_info = false;
 };
 
@@ -173,8 +175,26 @@ esp_err_t start_client() {
   ws_cfg.crt_bundle_attach = esp_crt_bundle_attach;
   ws_cfg.reconnect_timeout_ms = 10000;
   ws_cfg.network_timeout_ms = 10000;
-  
+
   ws_cfg.enable_close_reconnect = true;
+
+  // Set Authorization header if API key is configured
+  if (ctx.auth_header) {
+    free(ctx.auth_header);
+    ctx.auth_header = nullptr;
+  }
+  auto cfg = config_get();
+  if (cfg.api_key[0] != '\0') {
+    // Format: "Authorization: Bearer <key>\r\n"
+    size_t hdr_len = strlen("Authorization: Bearer \r\n") +
+                     strlen(cfg.api_key) + 1;
+    ctx.auth_header = static_cast<char*>(malloc(hdr_len));
+    if (ctx.auth_header) {
+      snprintf(ctx.auth_header, hdr_len, "Authorization: Bearer %s\r\n",
+               cfg.api_key);
+      ws_cfg.headers = ctx.auth_header;
+    }
+  }
 
   ctx.client = esp_websocket_client_init(&ws_cfg);
   if (!ctx.client) {
@@ -297,10 +317,14 @@ void sockets_deinit() {
     ctx.client = nullptr;
   }
 
-  // Free URL
+  // Free URL and auth header
   if (ctx.url) {
     free(ctx.url);
     ctx.url = nullptr;
+  }
+  if (ctx.auth_header) {
+    free(ctx.auth_header);
+    ctx.auth_header = nullptr;
   }
 
   ctx.state = State::Disconnected;

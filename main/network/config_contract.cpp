@@ -76,6 +76,11 @@ bool config_contract_apply_patch(const config_contract_state_t* in_state,
                     patch->image_url, 0, "image_url", err, err_len)) {
     return false;
   }
+  if (patch->has_api_key &&
+      !copy_checked(out_state->api_key, sizeof(out_state->api_key),
+                    patch->api_key, 0, "api_key", err, err_len)) {
+    return false;
+  }
 
   return true;
 }

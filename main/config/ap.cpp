@@ -161,6 +161,7 @@ void stop_dns_server() {
 esp_err_t root_handler(httpd_req_t* req) {
   auto cfg = config_get();
   const char* image_url = cfg.image_url[0] ? cfg.image_url : "";
+  const char* api_key = cfg.api_key[0] ? cfg.api_key : "";
   const char* swap_section = "";
 #if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3
   char swap_buf[192];
@@ -170,17 +171,69 @@ esp_err_t root_handler(httpd_req_t* req) {
 #endif
 
   ESP_LOGI(TAG, "Serving root page");
-  int len = snprintf(nullptr, 0, setup_html_start, image_url, swap_section);
+  int len =
+      snprintf(nullptr, 0, setup_html_start, image_url, api_key, swap_section);
   auto* buf = static_cast<char*>(malloc(len + 1));
   if (!buf) {
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                "Out of memory");
   }
-  snprintf(buf, len + 1, setup_html_start, image_url, swap_section);
+  snprintf(buf, len + 1, setup_html_start, image_url, api_key, swap_section);
   httpd_resp_set_type(req, "text/html");
   esp_err_t ret = httpd_resp_send(req, buf, len);
   free(buf);
   return ret;
+}
+
+/// Extract the "key" query parameter from a URL and strip it.
+/// If found, the value is copied to key_out and removed from url.
+void extract_key_from_url(char* url, char* key_out, size_t key_out_size) {
+  key_out[0] = '\0';
+
+  char* qmark = strchr(url, '?');
+  if (!qmark) return;
+
+  // Scan each parameter for "key="
+  char* search = qmark + 1;
+  char* key_param = nullptr;
+  while (search && *search) {
+    if (strncmp(search, "key=", 4) == 0 &&
+        (search == qmark + 1 || *(search - 1) == '&')) {
+      key_param = search;
+      break;
+    }
+    search = strchr(search, '&');
+    if (search) search++;
+  }
+  if (!key_param) return;
+
+  char* val_start = key_param + 4;
+  char* val_end = strchr(val_start, '&');
+  size_t val_len = val_end ? static_cast<size_t>(val_end - val_start)
+                           : strlen(val_start);
+  if (val_len == 0) return;
+  if (val_len >= key_out_size) val_len = key_out_size - 1;
+  memcpy(key_out, val_start, val_len);
+  key_out[val_len] = '\0';
+
+  // Strip the key parameter from the URL
+  if (key_param == qmark + 1) {
+    if (val_end) {
+      // ?key=val&rest -> ?rest
+      memmove(qmark + 1, val_end + 1, strlen(val_end + 1) + 1);
+    } else {
+      // ?key=val (only param) -> remove query string
+      *qmark = '\0';
+    }
+  } else {
+    // &key=val -> remove including leading '&'
+    char* amp = key_param - 1;
+    if (val_end) {
+      memmove(amp, val_end, strlen(val_end) + 1);
+    } else {
+      *amp = '\0';
+    }
+  }
 }
 
 void url_decode(char* str) {
@@ -248,6 +301,7 @@ esp_err_t save_handler(httpd_req_t* req) {
   char ssid[100] = {0};
   char password[200] = {0};
   char image_url[400] = {0};
+  char api_key[MAX_API_KEY_LEN + 1] = {0};
   char swap_val[2] = {0};
   bool swap_colors = false;
 
@@ -265,6 +319,11 @@ esp_err_t save_handler(httpd_req_t* req) {
     ESP_LOGD(TAG, "Image URL param missing");
   }
 
+  if (httpd_query_key_value(buf, "api_key", api_key, sizeof(api_key)) !=
+      ESP_OK) {
+    ESP_LOGD(TAG, "API key param missing");
+  }
+
   if (httpd_query_key_value(buf, "swap_colors", swap_val, sizeof(swap_val)) ==
       ESP_OK) {
     swap_colors = (strcmp(swap_val, "1") == 0);
@@ -273,6 +332,21 @@ esp_err_t save_handler(httpd_req_t* req) {
   url_decode(ssid);
   url_decode(password);
   url_decode(image_url);
+  url_decode(api_key);
+
+  // Auto-extract ?key= from URL if no explicit API key was provided
+  if (strlen(api_key) == 0) {
+    char extracted_key[MAX_API_KEY_LEN + 1] = {0};
+    extract_key_from_url(image_url, extracted_key, sizeof(extracted_key));
+    if (strlen(extracted_key) > 0) {
+      snprintf(api_key, sizeof(api_key), "%s", extracted_key);
+      ESP_LOGI(TAG, "Extracted API key from URL");
+    }
+  } else {
+    // User provided an explicit key — still strip ?key= from URL if present
+    char discard[MAX_API_KEY_LEN + 1];
+    extract_key_from_url(image_url, discard, sizeof(discard));
+  }
 
   ESP_LOGI(TAG, "Received SSID: %s, Image URL: %s, Swap Colors: %s", ssid,
            image_url, swap_colors ? "true" : "false");
@@ -286,6 +360,7 @@ esp_err_t save_handler(httpd_req_t* req) {
     } else {
       cfg.image_url[0] = '\0';
     }
+    snprintf(cfg.api_key, sizeof(cfg.api_key), "%s", api_key);
     cfg.swap_colors = swap_colors;
     config_set(&cfg);
   }

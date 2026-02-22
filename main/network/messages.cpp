@@ -58,6 +58,9 @@ esp_err_t msg_send_client_info() {
   cJSON_AddStringToObject(ci, "syslog_addr", cfg.syslog_addr);
   cJSON_AddStringToObject(ci, "sntp_server", cfg.sntp_server);
   cJSON_AddStringToObject(ci, "image_url", cfg.image_url);
+  if (cfg.api_key[0] != '\0') {
+    cJSON_AddBoolToObject(ci, "has_api_key", true);
+  }
   cJSON_AddBoolToObject(ci, "swap_colors", cfg.swap_colors);
   cJSON_AddNumberToObject(ci, "wifi_power_save", cfg.wifi_power_save);
   cJSON_AddBoolToObject(ci, "skip_display_version",

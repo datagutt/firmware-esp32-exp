@@ -21,6 +21,7 @@ constexpr const char* NVS_KEY_HOSTNAME = "hostname";
 constexpr const char* NVS_KEY_SYSLOG_ADDR = "syslog_addr";
 constexpr const char* NVS_KEY_SNTP_SERVER = "sntp_server";
 constexpr const char* NVS_KEY_IMAGE_URL = "image_url";
+constexpr const char* NVS_KEY_API_KEY = "api_key";
 constexpr const char* NVS_KEY_SWAP_COLORS = "swap_colors";
 constexpr const char* NVS_KEY_WIFI_POWER_SAVE = "wifi_ps";
 constexpr const char* NVS_KEY_SKIP_VERSION = "skip_ver";
@@ -51,6 +52,7 @@ esp_err_t persist_to_nvs() {
   nvs.set_str(NVS_KEY_SYSLOG_ADDR, s_config.syslog_addr);
   nvs.set_str(NVS_KEY_SNTP_SERVER, s_config.sntp_server);
   nvs.set_str(NVS_KEY_IMAGE_URL, s_config.image_url);
+  nvs.set_str(NVS_KEY_API_KEY, s_config.api_key);
 
   nvs.set_u8(NVS_KEY_SWAP_COLORS, s_config.swap_colors ? 1 : 0);
   nvs.set_u8(NVS_KEY_WIFI_POWER_SAVE,
@@ -132,6 +134,10 @@ esp_err_t nvs_settings_init(void) {
       sz = sizeof(s_config.image_url);
       if (nvs.get_str(NVS_KEY_IMAGE_URL, s_config.image_url, &sz) != ESP_OK)
         s_config.image_url[0] = '\0';
+
+      sz = sizeof(s_config.api_key);
+      if (nvs.get_str(NVS_KEY_API_KEY, s_config.api_key, &sz) != ESP_OK)
+        s_config.api_key[0] = '\0';
 
       uint8_t val_u8;
 
