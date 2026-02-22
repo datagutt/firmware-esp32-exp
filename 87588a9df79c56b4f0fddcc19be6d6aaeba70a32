@@ -1,0 +1,41 @@
+main/config/ap.cpp
+  a6343bea414f33fe 164,175,181,188-238,304,322-326,335-349,363
+main/network/messages.cpp
+  a6343bea414f33fe 61-63
+main/config/html/setup.html
+  a6343bea414f33fe 33-36
+main/network/remote.cpp
+  a6343bea414f33fe 14,246-255
+main/network/config_contract.h
+  a6343bea414f33fe 19,41-42
+main/config/nvs_settings.cpp
+  a6343bea414f33fe 24,55,138-141
+main/config/nvs_settings.h
+  a6343bea414f33fe 20,29
+main/network/handlers.cpp
+  a6343bea414f33fe 122,152-153,198-201,305-310
+main/network/sockets.cpp
+  a6343bea414f33fe 20,52,178,181-197,320,325-327
+main/network/config_contract.cpp
+  a6343bea414f33fe 79-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "87588a9df79c56b4f0fddcc19be6d6aaeba70a32",
+  "prompts": {
+    "a6343bea414f33fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "351ea576-7140-4895-b922-b799cb79f015",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 241,
+      "total_deletions": 96,
+      "accepted_lines": 149,
+      "overriden_lines": 0
+    }
+  }
+}
