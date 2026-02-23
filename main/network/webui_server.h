@@ -7,10 +7,14 @@
 extern "C" {
 #endif
 
-/// Mount the LittleFS web UI partition and register the static file handler
-/// on the HTTP server. Must be called after http_server_init().
-/// If the LittleFS mount fails, a minimal fallback page is served instead.
+/// Mount the LittleFS web UI partition (or note that fallback page will be
+/// used). Must be called after http_server_init().
 esp_err_t webui_server_init(void);
+
+/// Register the wildcard static file handler on the HTTP server.
+/// Must be called AFTER all API and specific routes are registered,
+/// because httpd matches by registration order and /* would shadow them.
+void webui_register_wildcard(void);
 
 #ifdef __cplusplus
 }

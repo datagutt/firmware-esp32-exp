@@ -20,6 +20,7 @@
 #include "sta_api.h"
 #include "syslog.h"
 #include "webp_player.h"
+#include "webui_server.h"
 #include "wifi.h"
 
 namespace {
@@ -77,6 +78,10 @@ void runtime_task(void*) {
   if (cfg.ap_mode) {
     ap_register_wildcard();
   }
+
+  // Register webui wildcard AFTER all API and specific routes so that
+  // /* does not shadow /api/* handlers (httpd matches by registration order).
+  webui_register_wildcard();
 
   if (cfg.ap_mode) {
     bool has_wifi_creds = (strlen(cfg.ssid) > 0);

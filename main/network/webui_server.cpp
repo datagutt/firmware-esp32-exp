@@ -152,22 +152,6 @@ esp_err_t static_file_handler(httpd_req_t* req) {
   return ESP_OK;
 }
 
-// ---------------------------------------------------------------------------
-// Handler registrar — called by http_server on (re)start
-// ---------------------------------------------------------------------------
-
-void register_webui_handlers(httpd_handle_t server) {
-  // Wildcard catch-all at lowest priority — all API and specific routes
-  // are registered first and take precedence.
-  const httpd_uri_t webui_uri = {
-      .uri = "/*",
-      .method = HTTP_GET,
-      .handler = static_file_handler,
-      .user_ctx = nullptr,
-  };
-  httpd_register_uri_handler(server, &webui_uri);
-}
-
 }  // namespace
 
 esp_err_t webui_server_init(void) {
@@ -192,8 +176,19 @@ esp_err_t webui_server_init(void) {
              esp_err_to_name(err));
   }
 
-  // Register the static file handler via the http_server registrar pattern
-  http_server_register_handlers(register_webui_handlers);
-
   return ESP_OK;
+}
+
+void webui_register_wildcard(void) {
+  httpd_handle_t server = http_server_handle();
+  if (!server) {
+    return;
+  }
+  const httpd_uri_t webui_uri = {
+      .uri = "/*",
+      .method = HTTP_GET,
+      .handler = static_file_handler,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &webui_uri);
 }
