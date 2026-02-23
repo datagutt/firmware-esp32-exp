@@ -59,6 +59,15 @@ bool wifi_wait_for_connection(uint32_t timeout_ms);
 bool wifi_wait_for_ipv6(uint32_t timeout_ms);
 
 /**
+ * @brief Get the current IPv4 address as a string
+ *
+ * @param buf Buffer to store the IP string (at least 16 bytes)
+ * @param buf_len Size of the buffer
+ * @return 0 on success, non-zero on failure
+ */
+int wifi_get_ip_str(char *buf, size_t buf_len);
+
+/**
  * @brief Check if WiFi is connected
  *
  * @return true if connected, false otherwise

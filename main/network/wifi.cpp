@@ -276,6 +276,15 @@ int wifi_get_mac(uint8_t mac[6]) {
   return 0;
 }
 
+int wifi_get_ip_str(char* buf, size_t buf_len) {
+  if (!s_sta_netif || !buf || buf_len < 16) return 1;
+  esp_netif_ip_info_t ip_info;
+  esp_err_t err = esp_netif_get_ip_info(s_sta_netif, &ip_info);
+  if (err != ESP_OK || ip_info.ip.addr == 0) return 1;
+  snprintf(buf, buf_len, IPSTR, IP2STR(&ip_info.ip));
+  return 0;
+}
+
 int wifi_set_hostname(const char* hostname) {
   if (s_sta_netif) {
     esp_err_t err = esp_netif_set_hostname(s_sta_netif, hostname);

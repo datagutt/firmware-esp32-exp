@@ -86,6 +86,11 @@ esp_err_t status_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(root, "mac", mac_str);
   }
 
+  char ip_str[16];
+  if (wifi_get_ip_str(ip_str, sizeof(ip_str)) == 0) {
+    cJSON_AddStringToObject(root, "ip", ip_str);
+  }
+
   heap_snapshot_t snap;
   heap_monitor_get_snapshot(&snap);
   cJSON_AddNumberToObject(root, "free_heap",
