@@ -1,0 +1,29 @@
+main/network/wifi.cpp
+  83576c1bbac7fd30 288-309
+main/network/wifi.h
+  83576c1bbac7fd30 71-80
+webui/index.html
+  83576c1bbac7fd30 72,75-77,107
+main/network/sta_api.cpp
+  83576c1bbac7fd30 94-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "65ab3d52c26ab5eaa198059c9b0394c7e65c24ce",
+  "prompts": {
+    "83576c1bbac7fd30": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e0615163-79b3-4abe-87cf-ce8c780e7d0e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 44,
+      "total_deletions": 1,
+      "accepted_lines": 44,
+      "overriden_lines": 0
+    }
+  }
+}
