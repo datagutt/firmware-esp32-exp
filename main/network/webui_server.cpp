@@ -154,6 +154,8 @@ esp_err_t static_file_handler(httpd_req_t* req) {
 
 }  // namespace
 
+bool webui_fs_mounted(void) { return s_fs_mounted; }
+
 esp_err_t webui_server_init(void) {
   // Try to mount LittleFS
   esp_vfs_littlefs_conf_t conf = {};

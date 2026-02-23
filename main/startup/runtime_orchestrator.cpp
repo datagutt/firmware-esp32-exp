@@ -75,17 +75,12 @@ void runtime_task(void*) {
 
   sta_api_start();
 
-  if (cfg.ap_mode) {
-    ap_register_wildcard();
-  }
-
-  // Register webui wildcard AFTER all API and specific routes so that
-  // /* does not shadow /api/* handlers (httpd matches by registration order).
-  webui_register_wildcard();
-
+  // Determine whether we need the captive-portal setup flow.
+  bool need_setup = false;
   if (cfg.ap_mode) {
     bool has_wifi_creds = (strlen(cfg.ssid) > 0);
     if (s_button_boot || (!sta_connected && !has_wifi_creds)) {
+      need_setup = true;
       ESP_LOGW(TAG, "Boot button pressed or no WiFi credentials configured");
       app_state_enter_config_portal();
       ESP_LOGI(TAG, "Loading Config WEBP");
@@ -102,6 +97,17 @@ void runtime_task(void*) {
                "Boot button pressed but AP mode disabled; skipping "
                "configuration portal");
     }
+  }
+
+  // Register the wildcard catch-all AFTER all API and specific routes so
+  // that /* does not shadow /api/* handlers (httpd matches by registration
+  // order).  Only ONE wildcard GET handler can exist.  Use the AP
+  // captive-portal wildcard during setup (needs redirects to work), and
+  // the webui handler for normal operation.
+  if (need_setup) {
+    ap_register_wildcard();
+  } else {
+    webui_register_wildcard();
   }
 
   if (s_button_boot) {
