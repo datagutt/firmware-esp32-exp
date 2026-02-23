@@ -91,6 +91,11 @@ esp_err_t status_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(root, "ip", ip_str);
   }
 
+  char ip6_str[40];
+  if (wifi_get_ip6_str(ip6_str, sizeof(ip6_str)) == 0) {
+    cJSON_AddStringToObject(root, "ip6", ip6_str);
+  }
+
   heap_snapshot_t snap;
   heap_monitor_get_snapshot(&snap);
   cJSON_AddNumberToObject(root, "free_heap",

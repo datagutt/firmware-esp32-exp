@@ -69,8 +69,12 @@
           <div class="stat-value" id="wifi-status">--</div>
         </div>
         <div class="stat">
-          <div class="stat-label">IP Address</div>
+          <div class="stat-label">IPv4 Address</div>
           <div class="stat-value" id="wifi-ip">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">IPv6 Address</div>
+          <div class="stat-value" id="wifi-ip6">--</div>
         </div>
         <div class="stat">
           <div class="stat-label">MAC Address</div>
@@ -100,6 +104,7 @@
         var status = await api('GET', '/api/status');
         $('#fw-version').textContent = status.firmware_version || '--';
         $('#wifi-ip').textContent = status.ip || '--';
+        $('#wifi-ip6').textContent = status.ip6 || '--';
         $('#wifi-mac').textContent = status.mac || '--';
         $('#heap-free').textContent = formatBytes(status.free_heap || 0);
         $('#heap-min').textContent = formatBytes(status.min_free_heap || 0);

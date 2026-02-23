@@ -285,6 +285,28 @@ int wifi_get_ip_str(char* buf, size_t buf_len) {
   return 0;
 }
 
+int wifi_get_ip6_str(char* buf, size_t buf_len) {
+  if (!s_sta_netif || !buf || buf_len < 40) return 1;
+
+  esp_ip6_addr_t addrs[CONFIG_LWIP_IPV6_NUM_ADDRESSES];
+  int count = esp_netif_get_all_ip6(s_sta_netif, addrs);
+  if (count <= 0) return 1;
+
+  // Prefer a global address; fall back to link-local
+  int best = -1;
+  for (int i = 0; i < count; i++) {
+    if (ip6_addr_isglobal((ip6_addr_t*)&addrs[i])) {
+      best = i;
+      break;
+    }
+    if (best < 0) best = i;
+  }
+  if (best < 0) return 1;
+
+  snprintf(buf, buf_len, IPV6STR, IPV62STR(addrs[best]));
+  return 0;
+}
+
 int wifi_set_hostname(const char* hostname) {
   if (s_sta_netif) {
     esp_err_t err = esp_netif_set_hostname(s_sta_netif, hostname);
