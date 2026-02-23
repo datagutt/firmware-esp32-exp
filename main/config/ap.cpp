@@ -415,7 +415,7 @@ esp_err_t captive_portal_handler(httpd_req_t* req) {
   }
 
   httpd_resp_set_status(req, "302 Found");
-  httpd_resp_set_hdr(req, "Location", "http://10.10.0.1/");
+  httpd_resp_set_hdr(req, "Location", "http://10.10.0.1/setup");
   httpd_resp_send(req, nullptr, 0);
 
   return ESP_OK;
@@ -443,6 +443,14 @@ esp_err_t ap_start(void) {
                           .handler = root_handler,
                           .user_ctx = nullptr};
   httpd_register_uri_handler(server, &root_uri);
+
+  // Also serve the setup page at /setup so it remains reachable even when
+  // the webui wildcard handles /* in normal operation.
+  httpd_uri_t setup_uri = {.uri = "/setup",
+                            .method = HTTP_GET,
+                            .handler = root_handler,
+                            .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &setup_uri);
 
   httpd_uri_t save_uri = {.uri = "/save",
                           .method = HTTP_POST,
