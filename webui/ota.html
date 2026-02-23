@@ -33,21 +33,21 @@
 
     <div class="card">
       <h2>Upload Firmware</h2>
-      <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">
+      <p class="card-desc">
         Select a <code>.bin</code> firmware file to upload. Use the app binary, not <code>merged_firmware.bin</code>.
       </p>
       <div class="form-group">
-        <input type="file" id="firmware-file" accept=".bin" style="color: var(--text);">
+        <input type="file" id="firmware-file" accept=".bin">
       </div>
       <div id="progress-section" style="display: none;">
         <div class="progress-bar">
           <div class="fill" id="progress-fill"></div>
         </div>
-        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+        <div class="progress-info">
           <span id="progress-text">0%</span>
         </div>
       </div>
-      <div id="status-msg" style="margin-top: 0.5rem; font-size: 0.875rem;"></div>
+      <div id="status-msg" class="status-msg"></div>
       <div class="btn-row">
         <button class="btn btn-primary" id="upload-btn" onclick="uploadFirmware()">Upload &amp; Flash</button>
       </div>
@@ -100,18 +100,18 @@
 
       xhr.onload = function() {
         if (xhr.status === 200) {
-          $('#status-msg').innerHTML = '<span style="color: var(--success);">Firmware uploaded successfully. Device is rebooting...</span>';
+          $('#status-msg').innerHTML = '<span class="text-success">Firmware uploaded successfully. Device is rebooting...</span>';
           $('#progress-fill').style.width = '100%';
           btn.textContent = 'Done';
         } else {
-          $('#status-msg').innerHTML = '<span style="color: var(--danger);">Upload failed: ' + (xhr.responseText || xhr.statusText) + '</span>';
+          $('#status-msg').innerHTML = '<span class="text-danger">Upload failed: ' + (xhr.responseText || xhr.statusText) + '</span>';
           btn.disabled = false;
           btn.textContent = 'Upload & Flash';
         }
       };
 
       xhr.onerror = function() {
-        $('#status-msg').innerHTML = '<span style="color: var(--danger);">Upload failed: network error</span>';
+        $('#status-msg').innerHTML = '<span class="text-danger">Upload failed: network error</span>';
         btn.disabled = false;
         btn.textContent = 'Upload & Flash';
       };
