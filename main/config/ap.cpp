@@ -438,14 +438,8 @@ esp_err_t ap_start(void) {
     return ESP_FAIL;
   }
 
-  httpd_uri_t root_uri = {.uri = "/",
-                          .method = HTTP_GET,
-                          .handler = root_handler,
-                          .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &root_uri);
-
-  // Also serve the setup page at /setup so it remains reachable even when
-  // the webui wildcard handles /* in normal operation.
+  // Serve the setup page at /setup so it is always reachable regardless of
+  // whether the webui wildcard handles /* in normal operation.
   httpd_uri_t setup_uri = {.uri = "/setup",
                             .method = HTTP_GET,
                             .handler = root_handler,
