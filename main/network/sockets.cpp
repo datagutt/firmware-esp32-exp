@@ -196,7 +196,10 @@ esp_err_t start_client() {
       snprintf(ctx.auth_header, hdr_len, "Authorization: Bearer %s\r\n",
                cfg.api_key);
       ws_cfg.headers = ctx.auth_header;
+      ESP_LOGI(TAG, "Auth header set (%d chars)", (int)strlen(cfg.api_key));
     }
+  } else {
+    ESP_LOGW(TAG, "No API key configured, connecting without auth");
   }
 
   ctx.client = esp_websocket_client_init(&ws_cfg);

@@ -46,7 +46,7 @@ void http_server_start(void) {
   }
 
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.stack_size = 4096;
+  config.stack_size = 6144;
   config.max_uri_handlers = 24;
   config.max_resp_headers = 16;
   config.recv_wait_timeout = 10;

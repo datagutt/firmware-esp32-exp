@@ -294,9 +294,9 @@ esp_err_t save_handler(httpd_req_t* req) {
   buf[received] = '\0';
   ESP_LOGI(TAG, "Received form data (%d bytes)", received);
 
-  char ssid[100] = {0};
-  char password[200] = {0};
-  char image_url[400] = {0};
+  char ssid[MAX_SSID_LEN + 1] = {0};
+  char password[MAX_PASSWORD_LEN + 1] = {0};
+  char image_url[MAX_URL_LEN + 1] = {0};
   char api_key[MAX_API_KEY_LEN + 1] = {0};
   char swap_val[2] = {0};
   bool swap_colors = false;
