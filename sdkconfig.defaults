@@ -56,6 +56,9 @@ CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
 # Enable FreeRTOS trace facility for task_dump console command.
 CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 
+# Enable per-task CPU usage tracking for runtime performance analysis.
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
 # Set FreeRTOS tick rate to 1ms (standard for high precision).
 CONFIG_FREERTOS_HZ=1000
 
@@ -84,6 +87,10 @@ CONFIG_HUB75_LATCH_BLANKING=1
 # https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA/discussions/258
 CONFIG_HUB75_CLK_8MHZ=y
 
+# Increase max request header size from default 512 to accommodate
+# Authorization headers with API keys.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
 # Target SoC architecture.
 CONFIG_IDF_TARGET="esp32"
 
@@ -104,6 +111,13 @@ CONFIG_LWIP_IPV6_AUTOCONFIG=y
 
 # Max DNS servers to accept via IPv6 Router Advertisements.
 CONFIG_LWIP_IPV6_RDNSS_MAX_DNS_SERVERS=2
+
+# Enable proper socket teardown to prevent socket leaks on connection drops.
+CONFIG_LWIP_SO_LINGER=y
+
+# Increase max sockets from default 10 to support concurrent httpd, WebSocket
+# client, mDNS, DNS, and SNTP connections without exhaustion under load.
+CONFIG_LWIP_MAX_SOCKETS=32
 
 # Allow checking for available data on a netconn.
 CONFIG_LWIP_SO_RCVBUF=y
