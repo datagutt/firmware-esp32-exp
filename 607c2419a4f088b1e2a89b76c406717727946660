@@ -1,0 +1,25 @@
+webui/settings.html
+  d71c708bcdbf4a3a 47-55
+main/config/ap.cpp
+  d71c708bcdbf4a3a 418,447-454
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "607c2419a4f088b1e2a89b76c406717727946660",
+  "prompts": {
+    "d71c708bcdbf4a3a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a3cc8ab-bdb8-477b-84f9-3b4693d7b5b7",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 19,
+      "total_deletions": 1,
+      "accepted_lines": 19,
+      "overriden_lines": 0
+    }
+  }
+}
