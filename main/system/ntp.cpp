@@ -5,17 +5,16 @@
 #include <ctime>
 
 #include <cJSON.h>
-#include <esp_event.h>
 #include <esp_http_client.h>
 #include <esp_log.h>
 #include <esp_sntp.h>
-#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 
 #include "embedded_tz_db.h"
+#include "event_bus.h"
 
 namespace {
 
@@ -248,18 +247,17 @@ void start_sntp() {
   esp_sntp_init();
 }
 
-// ── WiFi event handler ────────────────────────────────────────────
+// ── Event bus handler ─────────────────────────────────────────────
 
-void wifi_event_handler(void* /*arg*/, esp_event_base_t base, int32_t id,
-                        void* /*data*/) {
-  if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+void on_wifi_event(const tronbyt_event_t* event, void*) {
+  if (event->type == TRONBYT_EVENT_WIFI_CONNECTED) {
     apply_timezone_local();
     start_sntp();
 
     if (s_config.auto_timezone && s_config.fetch_tz_on_boot) {
       spawn_tz_fetch_task();
     }
-  } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+  } else if (event->type == TRONBYT_EVENT_WIFI_DISCONNECTED) {
     s_synced = false;
   }
 }
@@ -279,10 +277,8 @@ void ntp_init() {
   setenv("TZ", posix, 1);
   tzset();
 
-  esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                             wifi_event_handler, nullptr);
-  esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                             wifi_event_handler, nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_event, nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_DISCONNECTED, on_wifi_event, nullptr);
 
   ESP_LOGI(TAG, "NTP initialized (tz_db version: %s)", tz_db_get_version());
 }

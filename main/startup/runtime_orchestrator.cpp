@@ -5,10 +5,13 @@
 #include <esp_log.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
 #include <freertos/task.h>
 
 #include "ap.h"
+#include "app_state.h"
 #include "display.h"
+#include "event_bus.h"
 #include "heap_monitor.h"
 #include "ntp.h"
 #include "nvs_settings.h"
@@ -24,9 +27,16 @@ namespace {
 const char* TAG = "startup";
 constexpr uint32_t RUNTIME_TASK_STACK_SIZE = 6144;
 constexpr int RUNTIME_TASK_PRIORITY = 5;
+constexpr EventBits_t CONFIG_CHANGED_BIT = BIT0;
 
 bool s_button_boot = false;
-bool s_config_received = false;
+EventGroupHandle_t s_config_event_group = nullptr;
+
+void on_config_changed(const tronbyt_event_t*, void*) {
+  if (s_config_event_group) {
+    xEventGroupSetBits(s_config_event_group, CONFIG_CHANGED_BIT);
+  }
+}
 
 void runtime_task(void*) {
   auto cfg = config_get();
@@ -72,6 +82,7 @@ void runtime_task(void*) {
     bool has_wifi_creds = (strlen(cfg.ssid) > 0);
     if (s_button_boot || (!sta_connected && !has_wifi_creds)) {
       ESP_LOGW(TAG, "Boot button pressed or no WiFi credentials configured");
+      app_state_enter_config_portal();
       ESP_LOGI(TAG, "Loading Config WEBP");
       if (gfx_display_asset("config")) {
         ESP_LOGE(TAG, "Failed to display config screen - continuing without it");
@@ -96,14 +107,11 @@ void runtime_task(void*) {
     } else {
       ESP_LOGW(TAG,
                "Boot button pressed - waiting for configuration or timeout...");
-      int config_wait_counter = 0;
-      while (config_wait_counter < 120) {
-        if (s_config_received) {
-          ESP_LOGI(TAG, "Configuration received - proceeding");
-          break;
-        }
-        config_wait_counter++;
-        vTaskDelay(pdMS_TO_TICKS(1000));
+      EventBits_t bits = xEventGroupWaitBits(
+          s_config_event_group, CONFIG_CHANGED_BIT, pdTRUE, pdTRUE,
+          pdMS_TO_TICKS(120000));
+      if (bits & CONFIG_CHANGED_BIT) {
+        ESP_LOGI(TAG, "Configuration received - proceeding");
       }
     }
   }
@@ -120,12 +128,14 @@ void runtime_task(void*) {
       break;
     }
     ESP_LOGW(TAG, "Image URL is not set. Waiting for configuration...");
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    xEventGroupWaitBits(s_config_event_group, CONFIG_CHANGED_BIT, pdTRUE,
+                        pdTRUE, pdMS_TO_TICKS(5000));
   }
 
   ESP_LOGI(TAG, "Proceeding with image URL: %s", image_url);
   heap_monitor_log_status("pre-connect");
 
+  app_state_enter_normal();
   scheduler_init();
   if (strncmp(image_url, "ws://", 5) == 0 ||
       strncmp(image_url, "wss://", 6) == 0) {
@@ -143,14 +153,11 @@ void runtime_task(void*) {
 
 }  // namespace
 
-void runtime_orchestrator_on_config_saved() {
-  s_config_received = true;
-  ESP_LOGI(TAG, "Configuration saved - signaling runtime task");
-}
-
 void runtime_orchestrator_start(bool button_boot) {
   s_button_boot = button_boot;
-  s_config_received = false;
+
+  s_config_event_group = xEventGroupCreate();
+  event_bus_subscribe(TRONBYT_EVENT_CONFIG_CHANGED, on_config_changed, nullptr);
 
   BaseType_t ret = xTaskCreate(runtime_task, "runtime_coord",
                                RUNTIME_TASK_STACK_SIZE, nullptr,

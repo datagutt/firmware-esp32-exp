@@ -6,12 +6,15 @@
 #include <freertos/task.h>
 
 #include "ap.h"
+#include "app_state.h"
 #include "console.h"
 #include "display.h"
 #include "diag_event_ring.h"
+#include "event_bus.h"
 #include "heap_monitor.h"
 #include "http_server.h"
 #include "mdns_service.h"
+#include "webui_server.h"
 #include "nvs_settings.h"
 #include "startup/runtime_orchestrator.h"
 #include "sdkconfig.h"
@@ -119,6 +122,8 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Check for button press");
 
   ESP_ERROR_CHECK(nvs_settings_init());
+  ESP_ERROR_CHECK(event_bus_init());
+  app_state_init();
   diag_event_ring_init();
   console_init();
   heap_monitor_init();
@@ -130,6 +135,7 @@ extern "C" void app_main(void) {
   }
   esp_register_shutdown_handler(&wifi_shutdown);
   http_server_init();
+  webui_server_init();
   mdns_service_init();
 
   auto cfg = config_get();
@@ -161,7 +167,6 @@ extern "C" void app_main(void) {
     ap_start();
   }
 
-  wifi_register_config_callback(runtime_orchestrator_on_config_saved);
   runtime_orchestrator_start(button_boot);
 
   // Keep app_main short-lived to free stack early (matrx-fw style handoff).

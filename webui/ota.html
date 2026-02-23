@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tronbyt - Firmware Update</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Tronbyt</h1>
+      <nav>
+        <a href="/">Dashboard</a>
+        <a href="/settings.html">Settings</a>
+        <a href="/ota.html" class="active">Update</a>
+      </nav>
+    </header>
+
+    <div class="card">
+      <h2>Current Firmware</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="stat-label">Version</div>
+          <div class="stat-value" id="fw-version">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Model</div>
+          <div class="stat-value" id="model">--</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Upload Firmware</h2>
+      <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 0.75rem;">
+        Select a <code>.bin</code> firmware file to upload. Use the app binary, not <code>merged_firmware.bin</code>.
+      </p>
+      <div class="form-group">
+        <input type="file" id="firmware-file" accept=".bin" style="color: var(--text);">
+      </div>
+      <div id="progress-section" style="display: none;">
+        <div class="progress-bar">
+          <div class="fill" id="progress-fill"></div>
+        </div>
+        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+          <span id="progress-text">0%</span>
+        </div>
+      </div>
+      <div id="status-msg" style="margin-top: 0.5rem; font-size: 0.875rem;"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="upload-btn" onclick="uploadFirmware()">Upload &amp; Flash</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    async function loadInfo() {
+      try {
+        var status = await api('GET', '/api/status');
+        $('#fw-version').textContent = status.firmware_version || '--';
+      } catch (e) {}
+      try {
+        var about = await api('GET', '/api/about');
+        $('#model').textContent = about.model || '--';
+      } catch (e) {}
+    }
+
+    function uploadFirmware() {
+      var fileInput = $('#firmware-file');
+      if (!fileInput.files || !fileInput.files[0]) {
+        showToast('Please select a firmware file', 'error');
+        return;
+      }
+
+      var file = fileInput.files[0];
+      if (!file.name.endsWith('.bin')) {
+        showToast('Please select a .bin file', 'error');
+        return;
+      }
+
+      var xhr = new XMLHttpRequest();
+      var btn = $('#upload-btn');
+
+      btn.disabled = true;
+      btn.textContent = 'Uploading...';
+      $('#progress-section').style.display = 'block';
+      $('#status-msg').textContent = '';
+
+      xhr.open('POST', '/api/ota/upload', true);
+
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+          var pct = Math.round((e.loaded / e.total) * 100);
+          $('#progress-fill').style.width = pct + '%';
+          $('#progress-text').textContent = pct + '% (' + formatBytes(e.loaded) + ' / ' + formatBytes(e.total) + ')';
+        }
+      };
+
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          $('#status-msg').innerHTML = '<span style="color: var(--success);">Firmware uploaded successfully. Device is rebooting...</span>';
+          $('#progress-fill').style.width = '100%';
+          btn.textContent = 'Done';
+        } else {
+          $('#status-msg').innerHTML = '<span style="color: var(--danger);">Upload failed: ' + (xhr.responseText || xhr.statusText) + '</span>';
+          btn.disabled = false;
+          btn.textContent = 'Upload & Flash';
+        }
+      };
+
+      xhr.onerror = function() {
+        $('#status-msg').innerHTML = '<span style="color: var(--danger);">Upload failed: network error</span>';
+        btn.disabled = false;
+        btn.textContent = 'Upload & Flash';
+      };
+
+      xhr.send(file);
+    }
+
+    loadInfo();
+  </script>
+</body>
+</html>

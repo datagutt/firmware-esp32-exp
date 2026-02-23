@@ -27,7 +27,9 @@
 #include <nvs_flash.h>
 
 #include "ap.h"
+#include "app_state.h"
 #include "diag_event_ring.h"
+#include "event_bus.h"
 #include "nvs_settings.h"
 
 namespace {
@@ -43,8 +45,6 @@ constexpr int MAX_RECONNECT_ATTEMPTS = 10;
 
 EventGroupHandle_t s_wifi_event_group = nullptr;
 esp_netif_t* s_sta_netif = nullptr;
-void (*s_config_callback)(void) = nullptr;
-
 int s_reconnect_attempts = 0;
 bool s_connection_given_up = false;
 int s_wifi_disconnect_counter = 0;
@@ -58,6 +58,8 @@ void handle_successful_ip_acquisition() {
   s_connection_given_up = false;
   xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
   xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+  event_bus_emit_simple(TRONBYT_EVENT_WIFI_CONNECTED);
+  app_state_set_connectivity(CONNECTIVITY_CONNECTED);
 }
 
 void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -79,6 +81,8 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
         xEventGroupClearBits(s_wifi_event_group,
                              WIFI_CONNECTED_BIT | WIFI_CONNECTED_IPV6_BIT);
         xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+        event_bus_emit_simple(TRONBYT_EVENT_WIFI_DISCONNECTED);
+        app_state_set_connectivity(CONNECTIVITY_NO_WIFI);
 
         int64_t now_us = esp_timer_get_time();
         if ((now_us - s_disconnect_window_start_us) > 60000000LL) {
@@ -336,10 +340,6 @@ bool wifi_wait_for_ipv6(uint32_t timeout_ms) {
 
   ESP_LOGI(TAG, "IPv6 address wait timeout");
   return false;
-}
-
-void wifi_register_config_callback(void (*callback)(void)) {
-  s_config_callback = callback;
 }
 
 void wifi_health_check(void) {

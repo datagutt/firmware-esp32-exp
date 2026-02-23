@@ -75,9 +75,6 @@ typedef struct {
 
 void wifi_get_diag_stats(wifi_diag_stats_t* out);
 
-// Add new function to register config callback
-void wifi_register_config_callback(void (*callback)(void));
-
 /**
  * @brief Check WiFi health and reconnect if needed
  */

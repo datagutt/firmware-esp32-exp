@@ -6,6 +6,7 @@
 #include <freertos/semphr.h>
 
 #include "esp_log.h"
+#include "event_bus.h"
 #include "nvs_flash.h"
 #include "nvs_handle.h"
 #include "sdkconfig.h"
@@ -28,8 +29,13 @@ constexpr const char* NVS_KEY_SKIP_VERSION = "skip_ver";
 constexpr const char* NVS_KEY_AP_MODE = "ap_mode";
 constexpr const char* NVS_KEY_PREFER_IPV6 = "prefer_ipv6";
 
+// Atomic save keys — blob-based config persistence
+constexpr const char* NVS_KEY_CFG_CUR = "cfg";
+constexpr const char* NVS_KEY_CFG_NEW = "cfg_new";
+
 system_config_t s_config = {};
 SemaphoreHandle_t s_mutex = nullptr;
+uint32_t s_generation = 0;
 
 #ifndef WIFI_SSID
 #define WIFI_SSID ""
@@ -41,11 +47,49 @@ SemaphoreHandle_t s_mutex = nullptr;
 #define REMOTE_URL ""
 #endif
 
-/// Write all fields of s_config to NVS. Caller must hold s_mutex.
+/// Atomic save: write to temp key, validate, swap to main key, erase temp.
+/// Caller must hold s_mutex.
 esp_err_t persist_to_nvs() {
   NvsHandle nvs(NVS_NAMESPACE, NVS_READWRITE);
   if (!nvs) return nvs.open_error();
 
+  // Step 1: Write config blob to temp key
+  esp_err_t err =
+      nvs.set_blob(NVS_KEY_CFG_NEW, &s_config, sizeof(system_config_t));
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to write temp config blob: %s",
+             esp_err_to_name(err));
+    return err;
+  }
+  err = nvs.commit();
+  if (err != ESP_OK) return err;
+
+  // Step 2: Read back and validate temp key matches
+  system_config_t verify = {};
+  size_t verify_len = sizeof(verify);
+  err = nvs.get_blob(NVS_KEY_CFG_NEW, &verify, &verify_len);
+  if (err != ESP_OK || verify_len != sizeof(system_config_t) ||
+      memcmp(&verify, &s_config, sizeof(system_config_t)) != 0) {
+    ESP_LOGE(TAG, "Config blob verification failed");
+    nvs.erase_key(NVS_KEY_CFG_NEW);
+    nvs.commit();
+    return ESP_FAIL;
+  }
+
+  // Step 3: Write validated data to main key
+  err = nvs.set_blob(NVS_KEY_CFG_CUR, &s_config, sizeof(system_config_t));
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to write main config blob: %s",
+             esp_err_to_name(err));
+    return err;
+  }
+
+  // Step 4: Erase temp key and commit
+  nvs.erase_key(NVS_KEY_CFG_NEW);
+  err = nvs.commit();
+
+  // Also persist individual keys for backward compatibility with
+  // existing code that reads them (e.g., on downgrade)
   nvs.set_str(NVS_KEY_SSID, s_config.ssid);
   nvs.set_str(NVS_KEY_PASSWORD, s_config.password);
   nvs.set_str(NVS_KEY_HOSTNAME, s_config.hostname);
@@ -53,15 +97,58 @@ esp_err_t persist_to_nvs() {
   nvs.set_str(NVS_KEY_SNTP_SERVER, s_config.sntp_server);
   nvs.set_str(NVS_KEY_IMAGE_URL, s_config.image_url);
   nvs.set_str(NVS_KEY_API_KEY, s_config.api_key);
-
   nvs.set_u8(NVS_KEY_SWAP_COLORS, s_config.swap_colors ? 1 : 0);
   nvs.set_u8(NVS_KEY_WIFI_POWER_SAVE,
              static_cast<uint8_t>(s_config.wifi_power_save));
   nvs.set_u8(NVS_KEY_SKIP_VERSION, s_config.skip_display_version ? 1 : 0);
   nvs.set_u8(NVS_KEY_AP_MODE, s_config.ap_mode ? 1 : 0);
   nvs.set_u8(NVS_KEY_PREFER_IPV6, s_config.prefer_ipv6 ? 1 : 0);
+  nvs.commit();
 
-  return nvs.commit();
+  return err;
+}
+
+/// Attempt to load config from the atomic blob keys.
+/// Returns true if a valid blob was found and loaded into s_config.
+bool load_from_blob() {
+  NvsHandle nvs(NVS_NAMESPACE, NVS_READWRITE);
+  if (!nvs) return false;
+
+  // Check for interrupted save: if temp key exists but main doesn't, recover
+  system_config_t temp = {};
+  size_t temp_len = sizeof(temp);
+  bool has_temp =
+      (nvs.get_blob(NVS_KEY_CFG_NEW, &temp, &temp_len) == ESP_OK &&
+       temp_len == sizeof(system_config_t));
+
+  system_config_t main_cfg = {};
+  size_t main_len = sizeof(main_cfg);
+  bool has_main =
+      (nvs.get_blob(NVS_KEY_CFG_CUR, &main_cfg, &main_len) == ESP_OK &&
+       main_len == sizeof(system_config_t));
+
+  if (has_temp && !has_main) {
+    // Interrupted save — recover from temp key
+    ESP_LOGW(TAG, "Recovering config from interrupted save");
+    nvs.set_blob(NVS_KEY_CFG_CUR, &temp, sizeof(system_config_t));
+    nvs.erase_key(NVS_KEY_CFG_NEW);
+    nvs.commit();
+    memcpy(&s_config, &temp, sizeof(system_config_t));
+    return true;
+  }
+
+  if (has_temp) {
+    // Stale temp key — clean it up
+    nvs.erase_key(NVS_KEY_CFG_NEW);
+    nvs.commit();
+  }
+
+  if (has_main) {
+    memcpy(&s_config, &main_cfg, sizeof(system_config_t));
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace
@@ -103,8 +190,11 @@ esp_err_t nvs_settings_init(void) {
   s_config.prefer_ipv6 = true;
 #endif
 
-  // Load from NVS (overrides Kconfig defaults)
-  {
+  // Try atomic blob load first (new format)
+  if (load_from_blob()) {
+    ESP_LOGI(TAG, "Config loaded from atomic blob");
+  } else {
+    // Fall back to individual key loading (legacy format)
     NvsHandle nvs(NVS_NAMESPACE, NVS_READONLY);
     if (nvs) {
       size_t sz;
@@ -209,5 +299,16 @@ void config_set(const system_config_t* cfg) {
   xSemaphoreTake(s_mutex, portMAX_DELAY);
   memcpy(&s_config, cfg, sizeof(system_config_t));
   persist_to_nvs();
+  s_generation++;
   xSemaphoreGive(s_mutex);
+
+  event_bus_emit_i32(TRONBYT_EVENT_CONFIG_CHANGED,
+                     static_cast<int32_t>(s_generation));
+}
+
+uint32_t config_generation(void) {
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  uint32_t gen = s_generation;
+  xSemaphoreGive(s_mutex);
+  return gen;
 }

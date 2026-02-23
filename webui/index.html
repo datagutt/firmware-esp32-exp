@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tronbyt</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Tronbyt</h1>
+      <nav>
+        <a href="/" class="active">Dashboard</a>
+        <a href="/settings.html">Settings</a>
+        <a href="/ota.html">Update</a>
+      </nav>
+    </header>
+
+    <div class="card">
+      <h2>Device</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="stat-label">Firmware</div>
+          <div class="stat-value" id="fw-version">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Model</div>
+          <div class="stat-value" id="model">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Hostname</div>
+          <div class="stat-value" id="hostname">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Temperature</div>
+          <div class="stat-value" id="temperature">--</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Memory</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="stat-label">Internal Free</div>
+          <div class="stat-value" id="heap-free">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Internal Min</div>
+          <div class="stat-value" id="heap-min">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">SPIRAM Free</div>
+          <div class="stat-value" id="spiram-free">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Images Loaded</div>
+          <div class="stat-value" id="images-loaded">--</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>WiFi</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="stat-label">Status</div>
+          <div class="stat-value" id="wifi-status">--</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">MAC Address</div>
+          <div class="stat-value" id="wifi-mac">--</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Display</h2>
+      <div class="form-group">
+        <label for="brightness">Brightness</label>
+        <div class="brightness-row">
+          <input type="range" id="brightness" min="0" max="100" value="50">
+          <span class="value" id="brightness-val">50%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    var brightnessTimer = null;
+
+    async function loadStatus() {
+      try {
+        var status = await api('GET', '/api/status');
+        $('#fw-version').textContent = status.firmware_version || '--';
+        $('#wifi-mac').textContent = status.mac || '--';
+        $('#heap-free').textContent = formatBytes(status.free_heap || 0);
+        $('#heap-min').textContent = formatBytes(status.min_free_heap || 0);
+        $('#spiram-free').textContent = formatBytes(status.free_spiram || 0);
+        $('#images-loaded').textContent = status.images_loaded || '0';
+
+        if (status.temperature_c !== null && status.temperature_c !== undefined) {
+          $('#temperature').textContent = status.temperature_c.toFixed(1) + ' C';
+        } else {
+          $('#temperature').textContent = 'N/A';
+        }
+      } catch (e) {
+        console.error('Status fetch failed:', e);
+      }
+    }
+
+    async function loadAbout() {
+      try {
+        var about = await api('GET', '/api/about');
+        $('#model').textContent = about.model || '--';
+      } catch (e) {}
+    }
+
+    async function loadConfig() {
+      try {
+        var cfg = await api('GET', '/api/system/config');
+        $('#hostname').textContent = cfg.hostname || '--';
+
+        if (cfg.brightness !== undefined) {
+          $('#brightness').value = cfg.brightness;
+          $('#brightness-val').textContent = cfg.brightness + '%';
+        }
+      } catch (e) {}
+    }
+
+    async function loadHealth() {
+      try {
+        var health = await api('GET', '/api/health');
+        var el = $('#wifi-status');
+        if (health.status === 'ok') {
+          el.innerHTML = '<span class="indicator on"></span>Connected';
+        } else {
+          el.innerHTML = '<span class="indicator off"></span>Disconnected';
+        }
+      } catch (e) {
+        $('#wifi-status').innerHTML = '<span class="indicator off"></span>Unreachable';
+      }
+    }
+
+    function onBrightnessChange() {
+      var val = $('#brightness').value;
+      $('#brightness-val').textContent = val + '%';
+      clearTimeout(brightnessTimer);
+      brightnessTimer = setTimeout(function() {
+        api('POST', '/api/system/config', { brightness: parseInt(val) })
+          .catch(function(e) { showToast('Failed to set brightness', 'error'); });
+      }, 300);
+    }
+
+    $('#brightness').addEventListener('input', onBrightnessChange);
+
+    loadStatus();
+    loadAbout();
+    loadConfig();
+    loadHealth();
+
+    setInterval(loadStatus, 10000);
+    setInterval(loadHealth, 10000);
+  </script>
+</body>
+</html>

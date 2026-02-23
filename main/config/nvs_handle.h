@@ -58,6 +58,16 @@ class NvsHandle {
     return nvs_set_str(handle_, key, value);
   }
 
+  esp_err_t get_blob(const char* key, void* buffer, size_t* len) {
+    if (!*this) return ESP_ERR_INVALID_STATE;
+    return nvs_get_blob(handle_, key, buffer, len);
+  }
+
+  esp_err_t set_blob(const char* key, const void* data, size_t len) {
+    if (!*this) return ESP_ERR_INVALID_STATE;
+    return nvs_set_blob(handle_, key, data, len);
+  }
+
  private:
   nvs_handle_t handle_;
   esp_err_t open_err_;
