@@ -1,0 +1,27 @@
+main/startup/runtime_orchestrator.cpp
+  d71c708bcdbf4a3a 78-85
+main/network/webui_server.cpp
+  d71c708bcdbf4a3a 157-158
+main/network/webui_server.h
+  d71c708bcdbf4a3a 14-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "1cba4c5be6d42157b12146dada41c53b978866a1",
+  "prompts": {
+    "d71c708bcdbf4a3a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a3cc8ab-bdb8-477b-84f9-3b4693d7b5b7",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 5,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    }
+  }
+}
