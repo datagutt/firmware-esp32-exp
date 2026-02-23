@@ -1,0 +1,23 @@
+main/config/ap.cpp
+  d71c708bcdbf4a3a 441-442
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "d9ea715b9bf4050bf8754f74216865b3872feeac",
+  "prompts": {
+    "d71c708bcdbf4a3a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a3cc8ab-bdb8-477b-84f9-3b4693d7b5b7",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 8,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
