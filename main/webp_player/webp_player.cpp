@@ -158,6 +158,25 @@ bool create_decoder() {
     return false;
   }
 
+  if (ctx.anim_info.canvas_width == 0 || ctx.anim_info.canvas_height == 0) {
+    ESP_LOGE(TAG, "Invalid WebP dimensions: %ux%u",
+             ctx.anim_info.canvas_width, ctx.anim_info.canvas_height);
+    WebPAnimDecoderDelete(ctx.decoder);
+    ctx.decoder = nullptr;
+    return false;
+  }
+
+  size_t frame_size = (size_t)ctx.anim_info.canvas_width *
+                      ctx.anim_info.canvas_height * 4;  // RGBA
+  if (frame_size > CONFIG_HTTP_BUFFER_SIZE_MAX) {
+    ESP_LOGE(TAG, "Decoded frame too large: %zu bytes (%ux%u)",
+             frame_size, ctx.anim_info.canvas_width,
+             ctx.anim_info.canvas_height);
+    WebPAnimDecoderDelete(ctx.decoder);
+    ctx.decoder = nullptr;
+    return false;
+  }
+
   ESP_LOGI(TAG, "Decoder created: %u frames, %ux%u",
            ctx.anim_info.frame_count, ctx.anim_info.canvas_width,
            ctx.anim_info.canvas_height);
@@ -301,10 +320,16 @@ void handle_decode_error() {
 
   if (ctx.decode_error_count >= DECODE_RETRY_COUNT) {
     ESP_LOGE(TAG, "Max retries reached");
-    draw_error_indicator_pixel();
     emit_error_event();
     free_buffer();
-    goto_idle();
+    // Show oversize asset for RAM-sourced images (not embedded, to avoid loops)
+    if (ctx.source_type == GFX_SOURCE_RAM) {
+      goto_idle();
+      gfx_play_embedded("oversize", false);
+    } else {
+      draw_error_indicator_pixel();
+      goto_idle();
+    }
     return;
   }
 
@@ -588,6 +613,11 @@ void player_task(void*) {
     if (delay_ms < 0) {
       handle_decode_error();
       continue;
+    }
+
+    // Yield to prevent watchdog timeout on rapid frame sequences
+    if (delay_ms <= 1) {
+      taskYIELD();
     }
 
     // Wait for frame delay OR notification
