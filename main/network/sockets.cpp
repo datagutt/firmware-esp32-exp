@@ -8,15 +8,14 @@
 #include <cstring>
 
 #include <esp_crt_bundle.h>
-#include <esp_event.h>
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <esp_websocket_client.h>
-#include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/event_groups.h>
 
+#include "app_state.h"
 #include "display.h"
+#include "event_bus.h"
 #include "nvs_settings.h"
 #include "scheduler.h"
 #include "webp_player.h"
@@ -120,6 +119,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
       ctx.sent_client_info = false;
       msg_send_client_info();
       ctx.sent_client_info = true;
+      event_bus_emit_simple(TRONBYT_EVENT_WS_CONNECTED);
+      app_state_set_connectivity(CONNECTIVITY_SERVER_ONLINE);
       scheduler_on_ws_connect();
       break;
 
@@ -128,6 +129,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
       draw_error_indicator_pixel();
       if (ctx.state == State::Connected) {
         ctx.state = State::Ready;
+        event_bus_emit_simple(TRONBYT_EVENT_WS_DISCONNECTED);
+        app_state_set_connectivity(CONNECTIVITY_CONNECTED);
         scheduler_on_ws_disconnect();
         schedule_reconnect();
       }
@@ -193,7 +196,10 @@ esp_err_t start_client() {
       snprintf(ctx.auth_header, hdr_len, "Authorization: Bearer %s\r\n",
                cfg.api_key);
       ws_cfg.headers = ctx.auth_header;
+      ESP_LOGI(TAG, "Auth header set (%d chars)", (int)strlen(cfg.api_key));
     }
+  } else {
+    ESP_LOGW(TAG, "No API key configured, connecting without auth");
   }
 
   ctx.client = esp_websocket_client_init(&ws_cfg);
@@ -222,16 +228,16 @@ esp_err_t start_client() {
 }
 
 // ---------------------------------------------------------------------------
-// WiFi/IP event handlers (event-driven network awareness)
+// WiFi event handlers (via event bus)
 // ---------------------------------------------------------------------------
 
-void wifi_event_handler(void*, esp_event_base_t base, int32_t id, void*) {
-  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+void on_wifi_event(const tronbyt_event_t* event, void*) {
+  if (event->type == TRONBYT_EVENT_WIFI_DISCONNECTED) {
     if (ctx.state != State::Disconnected) {
       ESP_LOGW(TAG, "WiFi disconnected");
       ctx.state = State::Disconnected;
     }
-  } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+  } else if (event->type == TRONBYT_EVENT_WIFI_CONNECTED) {
     ESP_LOGI(TAG, "Got IP, state=%d", static_cast<int>(ctx.state));
     if (ctx.state == State::Disconnected) {
       ctx.state = State::Ready;
@@ -271,11 +277,9 @@ void sockets_init(const char* url) {
   esp_timer_create(&health_args, &health_timer);
   esp_timer_start_periodic(health_timer, HEALTH_CHECK_INTERVAL_US);
 
-  // Register WiFi/IP event handlers for event-driven reconnection
-  esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                             wifi_event_handler, nullptr);
-  esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                             wifi_event_handler, nullptr);
+  // Subscribe to WiFi events via event bus for reconnection
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_event, nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_DISCONNECTED, on_wifi_event, nullptr);
 
   // If already connected, start immediately
   if (wifi_is_connected()) {
@@ -304,11 +308,8 @@ void sockets_deinit() {
     health_timer = nullptr;
   }
 
-  // Unregister event handlers
-  esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                               wifi_event_handler);
-  esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                               wifi_event_handler);
+  // Unsubscribe from event bus
+  event_bus_unsubscribe(on_wifi_event);
 
   // Destroy client
   if (ctx.client) {

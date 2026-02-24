@@ -40,8 +40,13 @@ esp_err_t nvs_settings_init(void);
 /// Return a thread-safe copy of the current configuration.
 system_config_t config_get(void);
 
-/// Apply a new configuration and persist it to NVS.
+/// Apply a new configuration and persist it to NVS (atomic save).
 void config_set(const system_config_t* cfg);
+
+/// Return a monotonically-increasing generation counter that increments
+/// on every config_set() call. Useful for change detection (e.g., web UI
+/// can poll to know when settings changed).
+uint32_t config_generation(void);
 
 #ifdef __cplusplus
 }

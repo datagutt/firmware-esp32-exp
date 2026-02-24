@@ -9,3 +9,4 @@ dependencies:
     version: main
   espressif/cjson: "*"
   espressif/mdns: "*"
+  joltwallet/littlefs: "*"

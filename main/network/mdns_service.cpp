@@ -1,11 +1,10 @@
 #include "mdns_service.h"
 
 #include <esp_app_desc.h>
-#include <esp_event.h>
 #include <esp_log.h>
-#include <esp_wifi.h>
 #include <mdns.h>
 
+#include "event_bus.h"
 #include "nvs_settings.h"
 #include "sdkconfig.h"
 
@@ -71,10 +70,10 @@ void stop_mdns() {
   ESP_LOGI(TAG, "mDNS stopped");
 }
 
-void event_handler(void*, esp_event_base_t base, int32_t id, void*) {
-  if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+void on_wifi_event(const tronbyt_event_t* event, void*) {
+  if (event->type == TRONBYT_EVENT_WIFI_CONNECTED) {
     start_mdns();
-  } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+  } else if (event->type == TRONBYT_EVENT_WIFI_DISCONNECTED) {
     stop_mdns();
   }
 }
@@ -82,9 +81,7 @@ void event_handler(void*, esp_event_base_t base, int32_t id, void*) {
 }  // namespace
 
 void mdns_service_init(void) {
-  esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, event_handler,
-                             nullptr);
-  esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED,
-                             event_handler, nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_event, nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_DISCONNECTED, on_wifi_event, nullptr);
   ESP_LOGI(TAG, "mDNS event handlers registered");
 }

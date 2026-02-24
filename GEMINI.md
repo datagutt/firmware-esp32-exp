@@ -32,6 +32,11 @@ The firmware can be configured via a `secrets.json` file or via Kconfig (`idf.py
 3.  **Kconfig**:
     Use `idf.py menuconfig` to configure hardware types, boot animations, and other system settings under the "Tronbyt Configuration" menu.
 
+## Initialize ESP-IDF tools
+    ```bash
+    . ~/esp/esp-idf/export.sh
+    ```
+
 ## Building for Specific Hardware
 
 To build for a specific board, use the provided `sdkconfig.defaults.<board>` files or the convenience Makefile:

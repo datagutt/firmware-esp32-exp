@@ -7,16 +7,13 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_netif.h>
-#include <esp_app_desc.h>
-#include <esp_app_format.h>
-#include <esp_ota_ops.h>
-#include <esp_partition.h>
+#include <esp_random.h>
 #include <esp_wifi.h>
 #include <lwip/sockets.h>
-#include <sys/param.h>
 
 #include "http_server.h"
 #include "nvs_settings.h"
+#include "ota_http_upload.h"
 #include "webp_player.h"
 #include "wifi.h"
 
@@ -28,7 +25,6 @@ constexpr const char* DEFAULT_AP_SSID = "TRON-CONFIG";
 
 constexpr int DNS_PORT = 53;
 constexpr int DNS_MAX_LEN = 512;
-constexpr int OTA_BUFFER_SIZE = 1024;
 
 TaskHandle_t s_dns_task_handle = nullptr;
 TimerHandle_t s_ap_shutdown_timer = nullptr;
@@ -298,9 +294,9 @@ esp_err_t save_handler(httpd_req_t* req) {
   buf[received] = '\0';
   ESP_LOGI(TAG, "Received form data (%d bytes)", received);
 
-  char ssid[100] = {0};
-  char password[200] = {0};
-  char image_url[400] = {0};
+  char ssid[MAX_SSID_LEN + 1] = {0};
+  char password[MAX_PASSWORD_LEN + 1] = {0};
+  char image_url[MAX_URL_LEN + 1] = {0};
   char api_key[MAX_API_KEY_LEN + 1] = {0};
   char swap_val[2] = {0};
   bool swap_colors = false;
@@ -377,127 +373,9 @@ esp_err_t save_handler(httpd_req_t* req) {
 }
 
 esp_err_t update_handler(httpd_req_t* req) {
-  esp_ota_handle_t update_handle = 0;
-  const esp_partition_t* update_partition = nullptr;
-  auto* buf =
-      static_cast<char*>(heap_caps_malloc(OTA_BUFFER_SIZE, MALLOC_CAP_SPIRAM));
-  if (!buf) {
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Alloc failed");
-    return ESP_FAIL;
-  }
-
-  update_partition = esp_ota_get_next_update_partition(nullptr);
-  if (!update_partition) {
-    ESP_LOGE(TAG, "No OTA partition found");
-    free(buf);
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No partition");
-    return ESP_FAIL;
-  }
-
-  ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%lx",
-           update_partition->subtype, update_partition->address);
-
-  // Read first chunk and validate it looks like an app image (not a merged
-  // firmware containing bootloader + partition table + app).
-  int received = httpd_req_recv(
-      req, buf, (req->content_len < OTA_BUFFER_SIZE ? req->content_len
-                                                    : OTA_BUFFER_SIZE));
-  if (received <= 0) {
-    ESP_LOGE(TAG, "Failed to receive first OTA chunk");
-    free(buf);
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
-    return ESP_FAIL;
-  }
-
-  // A valid app binary has the app descriptor magic (0xABCD5432) at byte 32
-  // (24-byte image header + 8-byte segment header). A merged_firmware.bin starts
-  // with the bootloader and won't have this magic at that offset.
-  constexpr size_t kAppDescOffset =
-      sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t);
-  if (static_cast<size_t>(received) >= kAppDescOffset + sizeof(uint32_t)) {
-    uint32_t magic = 0;
-    memcpy(&magic, buf + kAppDescOffset, sizeof(magic));
-    if (magic != ESP_APP_DESC_MAGIC_WORD) {
-      ESP_LOGE(TAG,
-               "Not a valid app image (magic 0x%08lx at offset %u, expected "
-               "0x%08lx). Did you upload merged_firmware.bin instead of the "
-               "app binary?",
-               (unsigned long)magic, (unsigned)kAppDescOffset,
-               (unsigned long)ESP_APP_DESC_MAGIC_WORD);
-      free(buf);
-      httpd_resp_send_err(
-          req, HTTPD_400_BAD_REQUEST,
-          "Invalid firmware file. Use the app .bin, not merged_firmware.bin");
-      return ESP_FAIL;
-    }
-  }
-
-  esp_err_t err =
-      esp_ota_begin(update_partition, req->content_len, &update_handle);
+  esp_err_t err = ota_http_upload_perform(req);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "esp_ota_begin failed (%s)", esp_err_to_name(err));
-    free(buf);
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                        "OTA begin failed");
-    return ESP_FAIL;
-  }
-
-  // Write the first chunk we already received
-  err = esp_ota_write(update_handle, buf, received);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "esp_ota_write failed (%s)", esp_err_to_name(err));
-    esp_ota_end(update_handle);
-    free(buf);
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
-    return ESP_FAIL;
-  }
-
-  int remaining = req->content_len - received;
-
-  while (remaining > 0) {
-    received = httpd_req_recv(
-        req, buf, (remaining < OTA_BUFFER_SIZE ? remaining : OTA_BUFFER_SIZE));
-    if (received <= 0) {
-      if (received == HTTPD_SOCK_ERR_TIMEOUT) {
-        continue;
-      }
-      ESP_LOGE(TAG, "File receive failed");
-      esp_ota_end(update_handle);
-      free(buf);
-      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                          "Receive failed");
-      return ESP_FAIL;
-    }
-
-    err = esp_ota_write(update_handle, buf, received);
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "esp_ota_write failed (%s)", esp_err_to_name(err));
-      esp_ota_end(update_handle);
-      free(buf);
-      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                          "Write failed");
-      return ESP_FAIL;
-    }
-
-    remaining -= received;
-  }
-
-  free(buf);
-
-  err = esp_ota_end(update_handle);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "esp_ota_end failed (%s)", esp_err_to_name(err));
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA end failed");
-    return ESP_FAIL;
-  }
-
-  err = esp_ota_set_boot_partition(update_partition);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)",
-             esp_err_to_name(err));
-    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                        "Set boot failed");
-    return ESP_FAIL;
+    return err;  // Error response already sent by ota_http_upload_perform
   }
 
   ESP_LOGI(TAG, "OTA Success! Rebooting...");
@@ -537,7 +415,7 @@ esp_err_t captive_portal_handler(httpd_req_t* req) {
   }
 
   httpd_resp_set_status(req, "302 Found");
-  httpd_resp_set_hdr(req, "Location", "http://10.10.0.1/");
+  httpd_resp_set_hdr(req, "Location", "http://10.10.0.1/setup");
   httpd_resp_send(req, nullptr, 0);
 
   return ESP_OK;
@@ -560,11 +438,13 @@ esp_err_t ap_start(void) {
     return ESP_FAIL;
   }
 
-  httpd_uri_t root_uri = {.uri = "/",
-                          .method = HTTP_GET,
-                          .handler = root_handler,
-                          .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &root_uri);
+  // Serve the setup page at /setup so it is always reachable regardless of
+  // whether the webui wildcard handles /* in normal operation.
+  httpd_uri_t setup_uri = {.uri = "/setup",
+                            .method = HTTP_GET,
+                            .handler = root_handler,
+                            .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &setup_uri);
 
   httpd_uri_t save_uri = {.uri = "/save",
                           .method = HTTP_POST,

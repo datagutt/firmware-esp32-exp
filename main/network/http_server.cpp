@@ -1,8 +1,8 @@
 #include "http_server.h"
 
-#include <esp_event.h>
 #include <esp_log.h>
-#include <esp_wifi.h>
+
+#include "event_bus.h"
 
 namespace {
 
@@ -29,18 +29,14 @@ esp_err_t cors_options_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
-void event_handler(void *arg, esp_event_base_t base, int32_t id,
-                   void *event_data) {
-  if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-    http_server_start();
-  }
+void on_wifi_connected(const tronbyt_event_t*, void*) {
+  http_server_start();
 }
 
 }  // namespace
 
 void http_server_init(void) {
-  esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, event_handler,
-                             nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_connected, nullptr);
 }
 
 void http_server_start(void) {
@@ -50,8 +46,8 @@ void http_server_start(void) {
   }
 
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.stack_size = 4096;
-  config.max_uri_handlers = 16;
+  config.stack_size = 6144;
+  config.max_uri_handlers = 24;
   config.max_resp_headers = 16;
   config.recv_wait_timeout = 10;
   config.send_wait_timeout = 10;

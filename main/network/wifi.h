@@ -59,6 +59,26 @@ bool wifi_wait_for_connection(uint32_t timeout_ms);
 bool wifi_wait_for_ipv6(uint32_t timeout_ms);
 
 /**
+ * @brief Get the current IPv4 address as a string
+ *
+ * @param buf Buffer to store the IP string (at least 16 bytes)
+ * @param buf_len Size of the buffer
+ * @return 0 on success, non-zero on failure
+ */
+int wifi_get_ip_str(char *buf, size_t buf_len);
+
+/**
+ * @brief Get the current IPv6 address as a string
+ *
+ * Returns the global address if available, otherwise link-local.
+ *
+ * @param buf Buffer to store the IPv6 string (at least 40 bytes)
+ * @param buf_len Size of the buffer
+ * @return 0 on success, non-zero on failure
+ */
+int wifi_get_ip6_str(char *buf, size_t buf_len);
+
+/**
  * @brief Check if WiFi is connected
  *
  * @return true if connected, false otherwise
@@ -74,9 +94,6 @@ typedef struct {
 } wifi_diag_stats_t;
 
 void wifi_get_diag_stats(wifi_diag_stats_t* out);
-
-// Add new function to register config callback
-void wifi_register_config_callback(void (*callback)(void));
 
 /**
  * @brief Check WiFi health and reconnect if needed

@@ -16,8 +16,10 @@
 #include <lwip/netdb.h>
 #include <lwip/sockets.h>
 
+#include "app_state.h"
 #include "display.h"
 #include "diag_event_ring.h"
+#include "event_bus.h"
 #include "ota_url_utils.h"
 #include "webp_player.h"
 
@@ -160,6 +162,10 @@ void run_ota(const char* url) {
   ESP_LOGI(TAG, "Starting OTA update from URL: %s", final_url);
   diag_event_log("INFO", "ota_start", 0, final_url);
 
+  app_state_enter_ota();
+  app_state_set_ota_substate(OTA_SUBSTATE_FLASHING);
+  event_bus_emit_simple(TRONBYT_EVENT_OTA_STARTED);
+
   esp_http_client_config_t http_config = {};
   http_config.url = final_url;
   http_config.crt_bundle_attach = esp_crt_bundle_attach;
@@ -188,6 +194,8 @@ void run_ota(const char* url) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed: %s", esp_err_to_name(err));
     diag_event_log("ERROR", "ota_begin_fail", err, esp_err_to_name(err));
+    app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
+    app_state_enter_normal();
     display_clear();
     display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
     display_flip();
@@ -233,6 +241,8 @@ void run_ota(const char* url) {
     ESP_LOGE(TAG, "OTA Update failed: %s", esp_err_to_name(err));
     diag_event_log("ERROR", "ota_perform_fail", err, esp_err_to_name(err));
     esp_https_ota_finish(https_ota_handle);
+    app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
+    app_state_enter_normal();
     display_clear();
     display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
     display_flip();
@@ -240,14 +250,19 @@ void run_ota(const char* url) {
     s_ota_in_progress.store(false);
     gfx_start();
   } else {
+    app_state_set_ota_substate(OTA_SUBSTATE_VERIFYING);
     err = esp_https_ota_finish(https_ota_handle);
     if (err == ESP_OK) {
       ESP_LOGI(TAG, "OTA Update successful. Rebooting...");
       diag_event_log("INFO", "ota_success", 0, "OTA update successful");
+      app_state_set_ota_substate(OTA_SUBSTATE_PENDING_REBOOT);
+      event_bus_emit_simple(TRONBYT_EVENT_OTA_COMPLETE);
       gfx_safe_restart();
     } else {
       ESP_LOGE(TAG, "OTA Finish failed: %s", esp_err_to_name(err));
       diag_event_log("ERROR", "ota_finish_fail", err, esp_err_to_name(err));
+      app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
+      app_state_enter_normal();
       display_clear();
       display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
       display_flip();

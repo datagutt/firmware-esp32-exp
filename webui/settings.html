@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tronbyt - Settings</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Tronbyt</h1>
+      <nav>
+        <a href="/">Dashboard</a>
+        <a href="/settings.html" class="active">Settings</a>
+        <a href="/ota.html">Update</a>
+      </nav>
+    </header>
+
+    <div class="card">
+      <h2>Device Settings</h2>
+      <div class="form-group">
+        <label for="hostname">Hostname</label>
+        <input type="text" id="hostname" maxlength="32" placeholder="tronbyt-xxxxxx">
+      </div>
+      <div class="form-group">
+        <label for="timezone">Timezone</label>
+        <input type="text" id="timezone" placeholder="America/New_York">
+      </div>
+      <div class="form-group">
+        <label for="ntp-server">NTP Server</label>
+        <input type="text" id="ntp-server" placeholder="pool.ntp.org">
+      </div>
+      <div class="form-group">
+        <label for="brightness">Brightness</label>
+        <div class="brightness-row">
+          <input type="range" id="brightness" min="0" max="100" value="50">
+          <span class="value" id="brightness-val">50%</span>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="save-btn" onclick="saveSettings()">Save</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Wi-Fi &amp; Connection</h2>
+      <p class="card-desc">
+        Change Wi-Fi network, server URL, or API key.
+      </p>
+      <div class="btn-row">
+        <a href="/setup" class="btn btn-primary">Wi-Fi Setup</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Device Actions</h2>
+      <p class="card-desc">
+        Reboot the device. Double-click to confirm.
+      </p>
+      <div class="btn-row">
+        <button class="btn btn-danger" id="reboot-btn" onclick="rebootDevice()">Reboot</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    var rebootClicks = 0;
+    var rebootTimer = null;
+
+    async function loadSettings() {
+      try {
+        var cfg = await api('GET', '/api/system/config');
+        $('#hostname').value = cfg.hostname || '';
+        $('#timezone').value = cfg.timezone || '';
+        $('#ntp-server').value = cfg.ntp_server || '';
+        if (cfg.brightness !== undefined) {
+          $('#brightness').value = cfg.brightness;
+          $('#brightness-val').textContent = cfg.brightness + '%';
+        }
+      } catch (e) {
+        showToast('Failed to load settings', 'error');
+      }
+    }
+
+    async function saveSettings() {
+      var payload = {};
+      var hostname = $('#hostname').value.trim();
+      var timezone = $('#timezone').value.trim();
+      var ntp = $('#ntp-server').value.trim();
+      var brightness = parseInt($('#brightness').value);
+
+      if (hostname) payload.hostname = hostname;
+      if (timezone) payload.timezone = timezone;
+      if (ntp) payload.ntp_server = ntp;
+      payload.brightness = brightness;
+
+      try {
+        await api('POST', '/api/system/config', payload);
+        showToast('Settings saved', 'success');
+      } catch (e) {
+        showToast('Save failed: ' + e.message, 'error');
+      }
+    }
+
+    function rebootDevice() {
+      rebootClicks++;
+      if (rebootClicks === 1) {
+        $('#reboot-btn').textContent = 'Click again to confirm';
+        rebootTimer = setTimeout(function() {
+          rebootClicks = 0;
+          $('#reboot-btn').textContent = 'Reboot';
+        }, 3000);
+      } else if (rebootClicks >= 2) {
+        clearTimeout(rebootTimer);
+        rebootClicks = 0;
+        $('#reboot-btn').textContent = 'Rebooting...';
+        $('#reboot-btn').disabled = true;
+        api('POST', '/api/system/reboot')
+          .then(function() {
+            showToast('Device is rebooting...', 'success');
+          })
+          .catch(function() {
+            showToast('Reboot command sent', 'success');
+          });
+      }
+    }
+
+    $('#brightness').addEventListener('input', function() {
+      $('#brightness-val').textContent = this.value + '%';
+    });
+
+    loadSettings();
+  </script>
+</body>
+</html>

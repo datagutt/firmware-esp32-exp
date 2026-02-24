@@ -11,6 +11,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "app_state.h"
 #include "embedded_tz_db.h"
 #include "api_validation.h"
 #include "device_temperature.h"
@@ -24,6 +25,7 @@ extern void touch_on_brightness_set(uint8_t brightness);
 #include "mdns_service.h"
 #include "ntp.h"
 #include "nvs_settings.h"
+#include "ota_http_upload.h"
 #include "version.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -84,6 +86,16 @@ esp_err_t status_handler(httpd_req_t* req) {
     cJSON_AddStringToObject(root, "mac", mac_str);
   }
 
+  char ip_str[16];
+  if (wifi_get_ip_str(ip_str, sizeof(ip_str)) == 0) {
+    cJSON_AddStringToObject(root, "ip", ip_str);
+  }
+
+  char ip6_str[40];
+  if (wifi_get_ip6_str(ip6_str, sizeof(ip6_str)) == 0) {
+    cJSON_AddStringToObject(root, "ip6", ip6_str);
+  }
+
   heap_snapshot_t snap;
   heap_monitor_get_snapshot(&snap);
   cJSON_AddNumberToObject(root, "free_heap",
@@ -102,6 +114,11 @@ esp_err_t status_handler(httpd_req_t* req) {
   } else {
     cJSON_AddNullToObject(root, "temperature_c");
   }
+
+  cJSON_AddStringToObject(root, "app_state",
+                          app_state_name(app_state_get()));
+  cJSON_AddStringToObject(root, "connectivity",
+                          connectivity_level_name(app_state_get_connectivity()));
 
   char* json = cJSON_PrintUnformatted(root);
   cJSON_Delete(root);
@@ -464,6 +481,32 @@ esp_err_t time_zonedb_handler(httpd_req_t* req) {
   return ESP_OK;
 }
 
+esp_err_t reboot_handler(httpd_req_t* req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
+
+  // Delay briefly so the response is sent before restart
+  vTaskDelay(pdMS_TO_TICKS(500));
+  esp_restart();
+
+  return ESP_OK;  // unreachable
+}
+
+esp_err_t ota_upload_handler(httpd_req_t* req) {
+  esp_err_t err = ota_http_upload_perform(req);
+  if (err != ESP_OK) {
+    return err;  // Error response already sent by ota_http_upload_perform
+  }
+
+  ESP_LOGI(TAG, "OTA upload success, rebooting...");
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+
+  vTaskDelay(pdMS_TO_TICKS(500));
+  esp_restart();
+  return ESP_OK;
+}
+
 }  // namespace
 
 esp_err_t sta_api_start(void) {
@@ -530,6 +573,22 @@ esp_err_t sta_api_start(void) {
       .user_ctx = nullptr,
   };
   httpd_register_uri_handler(server, &zonedb_uri);
+
+  const httpd_uri_t reboot_uri = {
+      .uri = "/api/system/reboot",
+      .method = HTTP_POST,
+      .handler = reboot_handler,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &reboot_uri);
+
+  const httpd_uri_t ota_upload_uri = {
+      .uri = "/api/ota/upload",
+      .method = HTTP_POST,
+      .handler = ota_upload_handler,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &ota_upload_uri);
 
   return ESP_OK;
 }
