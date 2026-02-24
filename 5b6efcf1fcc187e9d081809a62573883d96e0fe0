@@ -1,0 +1,23 @@
+main/network/sockets.cpp
+  907ba810c006929a 12,14,39-42,68-70,155-156,178-202,204,223-247,249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "5b6efcf1fcc187e9d081809a62573883d96e0fe0",
+  "prompts": {
+    "907ba810c006929a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bbc7b5dc-4e6a-4801-ac0b-f0b709c3081f",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 65,
+      "total_deletions": 2,
+      "accepted_lines": 63,
+      "overriden_lines": 0
+    }
+  }
+}
