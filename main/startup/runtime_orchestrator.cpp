@@ -144,6 +144,13 @@ void runtime_task(void*) {
   }
 
   ESP_LOGI(TAG, "Proceeding with image URL: %s", image_url);
+
+  if (cfg.api_key[0] != '\0') {
+    size_t key_len = strlen(cfg.api_key);
+    ESP_LOGI(TAG, "API key: ...%s",
+             cfg.api_key + (key_len > 4 ? key_len - 4 : 0));
+  }
+
   heap_monitor_log_status("pre-connect");
 
   app_state_enter_normal();
