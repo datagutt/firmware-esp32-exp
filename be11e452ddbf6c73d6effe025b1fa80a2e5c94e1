@@ -1,0 +1,27 @@
+main/scheduler/scheduler.cpp
+  907ba810c006929a 493-496
+main/network/sockets.cpp
+  907ba810c006929a 37-41,65-71,86-99,152-155,161,182,305-311,340-344
+main/scheduler/scheduler.h
+  907ba810c006929a 22-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "be11e452ddbf6c73d6effe025b1fa80a2e5c94e1",
+  "prompts": {
+    "907ba810c006929a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bbc7b5dc-4e6a-4801-ac0b-f0b709c3081f",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 52,
+      "total_deletions": 0,
+      "accepted_lines": 52,
+      "overriden_lines": 0
+    }
+  }
+}
