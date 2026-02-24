@@ -9,7 +9,9 @@
 
 #include <esp_crt_bundle.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_wifi.h>
 #include <esp_websocket_client.h>
 #include <freertos/FreeRTOS.h>
 
@@ -34,6 +36,10 @@ constexpr int64_t INITIAL_CONNECT_DELAY_US = 500 * 1000;  // 0.5 seconds
 constexpr int64_t GOT_IP_CONNECT_DELAY_US = 1500 * 1000;  // 1.5 seconds
 constexpr int64_t HEALTH_CHECK_INTERVAL_US = 30000 * 1000;  // 30 seconds
 
+// Socket failure escalation thresholds
+constexpr int MAX_SOCK_FAILURES_BEFORE_WIFI_RESET = 5;
+constexpr int MAX_WIFI_RESETS_BEFORE_RESTART = 3;
+
 // ---------------------------------------------------------------------------
 // State machine
 // ---------------------------------------------------------------------------
@@ -53,6 +59,9 @@ struct SocketContext {
 };
 
 SocketContext ctx;
+
+int sock_failure_count = 0;
+int wifi_disconnect_count = 0;
 
 // Timers
 esp_timer_handle_t reconnect_timer = nullptr;
@@ -116,6 +125,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
     case WEBSOCKET_EVENT_CONNECTED:
       ESP_LOGI(TAG, "Connected");
       ctx.state = State::Connected;
+      sock_failure_count = 0;
+      wifi_disconnect_count = 0;
       ctx.sent_client_info = false;
       msg_send_client_info();
       ctx.sent_client_info = true;
@@ -132,7 +143,33 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
         event_bus_emit_simple(TRONBYT_EVENT_WS_DISCONNECTED);
         app_state_set_connectivity(CONNECTIVITY_CONNECTED);
         scheduler_on_ws_disconnect();
-        schedule_reconnect();
+
+        sock_failure_count++;
+        ESP_LOGW(TAG, "Socket failure %d/%d (wifi resets: %d/%d)",
+                 sock_failure_count, MAX_SOCK_FAILURES_BEFORE_WIFI_RESET,
+                 wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
+
+        if (sock_failure_count >= MAX_SOCK_FAILURES_BEFORE_WIFI_RESET) {
+          wifi_disconnect_count++;
+          sock_failure_count = 0;
+
+          if (wifi_disconnect_count >= MAX_WIFI_RESETS_BEFORE_RESTART) {
+            ESP_LOGE(TAG, "Too many WiFi resets (%d), restarting",
+                     wifi_disconnect_count);
+            esp_restart();
+          }
+
+          ESP_LOGW(TAG, "Too many socket failures, disconnecting WiFi (%d/%d)",
+                   wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
+          if (ctx.client) {
+            esp_websocket_client_stop(ctx.client);
+            esp_websocket_client_destroy(ctx.client);
+            ctx.client = nullptr;
+          }
+          esp_wifi_disconnect();
+        } else {
+          schedule_reconnect();
+        }
       }
       break;
 
@@ -150,7 +187,33 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
       if (ctx.state == State::Connected) {
         ctx.state = State::Ready;
         scheduler_on_ws_disconnect();
-        schedule_reconnect();
+
+        sock_failure_count++;
+        ESP_LOGW(TAG, "Socket failure %d/%d (wifi resets: %d/%d)",
+                 sock_failure_count, MAX_SOCK_FAILURES_BEFORE_WIFI_RESET,
+                 wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
+
+        if (sock_failure_count >= MAX_SOCK_FAILURES_BEFORE_WIFI_RESET) {
+          wifi_disconnect_count++;
+          sock_failure_count = 0;
+
+          if (wifi_disconnect_count >= MAX_WIFI_RESETS_BEFORE_RESTART) {
+            ESP_LOGE(TAG, "Too many WiFi resets (%d), restarting",
+                     wifi_disconnect_count);
+            esp_restart();
+          }
+
+          ESP_LOGW(TAG, "Too many socket failures, disconnecting WiFi (%d/%d)",
+                   wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
+          if (ctx.client) {
+            esp_websocket_client_stop(ctx.client);
+            esp_websocket_client_destroy(ctx.client);
+            ctx.client = nullptr;
+          }
+          esp_wifi_disconnect();
+        } else {
+          schedule_reconnect();
+        }
       }
       break;
   }
