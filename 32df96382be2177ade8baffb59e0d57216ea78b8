@@ -1,0 +1,23 @@
+main/network/wifi.cpp
+  f88983277be5f411 75-79,82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "32df96382be2177ade8baffb59e0d57216ea78b8",
+  "prompts": {
+    "f88983277be5f411": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9dff6b99-ed88-4213-965c-17452a992909",
+        "model": "<synthetic>"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 2,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
