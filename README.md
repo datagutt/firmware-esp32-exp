@@ -77,6 +77,7 @@ The firmware supports several advanced settings stored in Non-Volatile Storage (
 | **Hostname** | `hostname` | The network hostname of the device. Defaults to `tronbyt-<mac>`. |
 | **Syslog Address** | `syslog_addr` | Remote Syslog (RFC 5424) server in `host:port` format (e.g., `192.168.1.10:1517`). |
 | **SNTP Server** | `sntp_server` | Custom NTP server for time synchronization. Defaults to DHCP provided servers or `pool.ntp.org`. |
+| **API Key** | `api_key` | Bearer token for server authentication (sent via `Authorization` header on HTTP and WebSocket connections). |
 | **Swap Colors** | `swap_colors` | Boolean (0/1) to swap RGB color order. Useful for specific panel variants. |
 | **AP Mode** | `ap_mode` | Boolean (0/1) to enable/disable the fallback WiFi configuration portal. |
 | **WiFi Power Save**| `wifi_ps` | WiFi power management mode (0: None, 1: Min, 2: Max). |
@@ -111,7 +112,7 @@ The firmware has a rudimentary wifi config portal page that can be accessed by j
 
 ### HTTP API (STA mode)
 
-Available on the device's IP once connected to WiFi. All endpoints return JSON and support CORS (`OPTIONS /api/*`).
+Available on the device's IP once connected to WiFi. All endpoints return JSON and support CORS (`OPTIONS /api/*`). Full OpenAPI 3.0.3 spec available in [`api-docs.yaml`](api-docs.yaml).
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
@@ -119,9 +120,11 @@ Available on the device's IP once connected to WiFi. All endpoints return JSON a
 | `GET` | `/api/health` | Simple health check. Returns `{"status":"ok"}` (200) or `{"status":"degraded"}` (503) based on WiFi connectivity |
 | `GET` | `/api/about` | Board model, device type, firmware version |
 | `GET` | `/api/diag` | Diagnostics: reboot reason, WiFi stats (reconnect attempts, disconnect events), heap trend history, recent diagnostic events, OTA history |
-| `GET` | `/api/system/config` | Current system config: auto timezone, timezone, NTP server, hostname, diag events enabled |
-| `POST` | `/api/system/config` | Update system config. Accepts JSON with optional keys: `auto_timezone` (bool), `timezone` (string), `ntp_server` (string), `hostname` (string), `diag_events_enabled` (bool) |
+| `GET` | `/api/system/config` | Current system config: auto timezone, timezone, NTP server, hostname, diag events enabled, brightness |
+| `POST` | `/api/system/config` | Update system config. Accepts JSON with optional keys: `auto_timezone` (bool), `timezone` (string), `ntp_server` (string), `hostname` (string), `diag_events_enabled` (bool), `brightness` (int, 0-100) |
 | `GET` | `/api/time/zonedb` | Full IANA timezone database (chunked response). Returns array of `{name, rule}` objects |
+| `POST` | `/api/system/reboot` | Trigger device reboot |
+| `POST` | `/api/ota/upload` | Upload firmware binary or TBUP bundle (see [OTA Bundle Updates](#ota-bundle-updates)) |
 
 ### WebSocket Interface
 
@@ -154,13 +157,47 @@ Available when the device is in AP configuration mode (SSID: `TRON-CONFIG`, IP: 
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/` | WiFi setup form (SSID, password, image URL, swap colors) |
+| `GET` | `/` | WiFi setup form (SSID, password, image URL, API key) |
 | `POST` | `/save` | Save WiFi credentials and config, then reboot |
-| `POST` | `/update` | OTA firmware upload (binary `.bin` file) |
+| `POST` | `/update` | OTA firmware upload (binary `.bin` file or TBUP bundle) |
 | `GET` | `/hotspot-detect.html` | Captive portal redirect (Apple) |
 | `GET` | `/generate_204` | Captive portal redirect (Android) |
 | `GET` | `/ncsi.txt` | Captive portal redirect (Windows) |
 | `GET` | `/*` | Wildcard catch-all redirect to portal |
+
+## Web UI
+
+On boards with an 8MB+ flash and a `webui` partition (e.g. Tronbyt S3), the firmware serves a built-in web dashboard from a LittleFS partition. Access it at `http://<device-ip>/` or `http://tronbyt.local/` (via mDNS).
+
+- WiFi status card showing SSID, IPv4 and IPv6 addresses
+- `/setup` route for WiFi and server configuration
+- Serves gzip-compressed static assets with SPA routing
+- Falls back to the embedded setup page if the LittleFS partition is missing or corrupt (e.g. 4MB boards)
+
+## OTA Bundle Updates
+
+The firmware accepts a **TBUP bundle** that packages the app firmware and WebUI LittleFS image into a single file. This allows updating both partitions over HTTP without a USB connection.
+
+```
+Offset  Size  Field
+0       4     Magic: "TBUP"
+4       4     App size (uint32 LE)
+8       4     WebUI size (uint32 LE, 0 = app-only)
+12      4     Reserved (0)
+16      N     App firmware binary
+16+N    M     WebUI LittleFS image (optional)
+```
+
+Upload via `POST /api/ota/upload` (STA) or `POST /update` (AP) -- the same endpoints accept both plain `.bin` files and TBUP bundles (auto-detected by magic bytes).
+
+Create bundles with the included tool:
+
+```bash
+python tools/create_bundle.py firmware.bin --webui webui.bin -o bundle.bin
+python tools/create_bundle.py firmware.bin -o bundle.bin  # app-only
+```
+
+Safety: the app is written and boot partition set before the WebUI write begins. If the WebUI write fails or the board has no `webui` partition, the device boots normally with the new app.
 
 ## Differences from Original Firmware
 
@@ -199,7 +236,15 @@ This project is a modernized rewrite of the [original Tronbyt firmware](https://
 
 ### Additional Features (not in original)
 
-- **HTTP REST API** — status, health, diagnostics, system config, and timezone database endpoints (see [API Routes](#api-routes))
+- **Web UI dashboard** — built-in LittleFS web interface with WiFi status, setup page, and SPA routing (see [Web UI](#web-ui))
+- **OTA bundle updates** — single-file updates for app + WebUI via TBUP format (see [OTA Bundle Updates](#ota-bundle-updates))
+- **HTTP REST API** — status, health, diagnostics, system config, brightness, reboot, OTA upload, and timezone database endpoints (see [API Routes](#api-routes))
+- **API key authentication** — optional Bearer token auth for server communication (HTTP and WebSocket)
+- **Event bus** — decoupled publish/subscribe architecture for system, network, display, and OTA events
+- **Application state machine** — boot, normal, config portal, OTA, and error states with connectivity tracking
+- **Touch control** — single tap (next app), double tap (cycle brightness), long hold (toggle display) on Tidbyt Gen 2
+- **Brightness control** — adjustable via REST API, WebSocket, or touch (0-100%)
+- **OpenAPI spec** — full API documentation in [`api-docs.yaml`](api-docs.yaml)
 - **USB Serial console** — interactive diagnostics via `CONFIG_ENABLE_CONSOLE`
 - **Heap monitor** — tracks memory usage with trend history
 - **Device temperature** — on-chip temperature sensor reading
@@ -212,6 +257,8 @@ This project is a modernized rewrite of the [original Tronbyt firmware](https://
 - **CORS support** — cross-origin requests enabled on all API endpoints
 - **Clean display shutdown** — `gfx_safe_restart` for graceful reboot
 - **OTA image validation** — checks app descriptor magic to reject merged binaries uploaded via portal
+- **Oversize image protection** — rejects WebP images exceeding display dimensions at decode stage
+- **WiFi resilience** — escalates repeated socket failures to WiFi reset and device restart
 
 ## Troubleshooting
 
