@@ -1,0 +1,31 @@
+tools/create_bundle.py
+  66ad28076f8e5cf8 1-72
+main/network/webui_server.cpp
+  66ad28076f8e5cf8 159-165
+main/system/ota_http_upload.cpp
+  66ad28076f8e5cf8 11-12,17-80,105,116-308,310-311
+.github/workflows/main.yml
+  66ad28076f8e5cf8 144-150,154,208
+main/network/webui_server.h
+  66ad28076f8e5cf8 17-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.4",
+  "base_commit_sha": "42cd802e4a0566e55bbac9f0529835ac88579f6a",
+  "prompts": {
+    "66ad28076f8e5cf8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c1a3151-09c9-4d56-b2cf-8749e62cd717",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 358,
+      "total_deletions": 2,
+      "accepted_lines": 357,
+      "overriden_lines": 0
+    }
+  }
+}
