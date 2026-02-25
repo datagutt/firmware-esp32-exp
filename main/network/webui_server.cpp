@@ -156,6 +156,14 @@ esp_err_t static_file_handler(httpd_req_t* req) {
 
 bool webui_fs_mounted(void) { return s_fs_mounted; }
 
+void webui_unmount(void) {
+  if (s_fs_mounted) {
+    esp_vfs_littlefs_unregister(PARTITION_LABEL);
+    s_fs_mounted = false;
+    ESP_LOGI(TAG, "LittleFS unmounted for OTA update");
+  }
+}
+
 esp_err_t webui_server_init(void) {
   // Try to mount LittleFS
   esp_vfs_littlefs_conf_t conf = {};

@@ -141,9 +141,17 @@ jobs:
           # Run esptool from within the build directory so relative paths in flash_args work
           (cd "$BUILD_DIR" && python -m esptool --chip "$chip" merge-bin -o "merged_firmware.bin" @flash_args)
 
+          # Generate OTA bundle (app + optional webui)
+          if [ -f "$BUILD_DIR/webui.bin" ]; then
+            python tools/create_bundle.py "$BUILD_DIR/firmware.bin" --webui "$BUILD_DIR/webui.bin" -o "$BUILD_DIR/bundle.bin"
+          else
+            python tools/create_bundle.py "$BUILD_DIR/firmware.bin" -o "$BUILD_DIR/bundle.bin"
+          fi
+
           # Rename for artifact upload
           mv "$BUILD_DIR/firmware.bin" "${target}_firmware.bin"
           mv "$BUILD_DIR/merged_firmware.bin" "${target}_merged.bin"
+          mv "$BUILD_DIR/bundle.bin" "${target}_bundle.bin"
 
       - name: Size Delta Check
         if: github.event_name == 'pull_request'
@@ -197,6 +205,7 @@ jobs:
           path: |
             ${{ matrix.target }}_firmware.bin
             ${{ matrix.target }}_merged.bin
+            ${{ matrix.target }}_bundle.bin
           if-no-files-found: error
 
   release:
