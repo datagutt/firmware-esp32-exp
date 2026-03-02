@@ -1,0 +1,23 @@
+main/scheduler/scheduler.cpp
+  079d34ef8a578615 41-45,82,283-288
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.7",
+  "base_commit_sha": "c5dde72463c0176661339ab1c2171c00595c72f8",
+  "prompts": {
+    "079d34ef8a578615": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cae9f-a473-7cf0-a64b-91404ae6d036",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 16,
+      "total_deletions": 5,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    }
+  }
+}
