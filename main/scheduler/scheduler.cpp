@@ -38,6 +38,11 @@ namespace {
 
 constexpr int64_t PREFETCH_BEFORE_US = 2 * 1000 * 1000;  // 2 s before dwell
 constexpr int64_t RETRY_DELAY_US = 5 * 1000 * 1000;      // 5 s on error
+#ifndef CONFIG_REFRESH_INTERVAL_SECONDS
+constexpr int32_t DEFAULT_REFRESH_INTERVAL = 10;
+#else
+constexpr int32_t DEFAULT_REFRESH_INTERVAL = CONFIG_REFRESH_INTERVAL_SECONDS;
+#endif
 
 // ---------------------------------------------------------------------------
 // Mode & State
@@ -74,7 +79,7 @@ struct PrefetchResult {
   uint8_t* webp = nullptr;
   size_t len = 0;
   uint8_t brightness_pct = 0;
-  int32_t dwell_secs = 0;
+  int32_t dwell_secs = -1;
   int status_code = 0;
   char* ota_url = nullptr;
   bool failed = false;
@@ -275,6 +280,12 @@ void http_apply_prefetch() {
   ctx.brightness_pct = ctx.prefetch.brightness_pct;
 
   int32_t dwell = ctx.prefetch.dwell_secs;
+  if (dwell <= 0) {
+    ESP_LOGW(TAG, "HTTP response missing/invalid dwell (%ld), using default %ld",
+             static_cast<long>(dwell),
+             static_cast<long>(DEFAULT_REFRESH_INTERVAL));
+    dwell = DEFAULT_REFRESH_INTERVAL;
+  }
   int counter = gfx_update(ctx.prefetch.webp, ctx.prefetch.len, dwell);
   if (counter < 0) {
     ESP_LOGE(TAG, "Failed to queue HTTP-fetched WebP");
