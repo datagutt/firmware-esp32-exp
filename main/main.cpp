@@ -83,7 +83,7 @@ void touch_task(void*) {
     if (event != TOUCH_EVENT_NONE) {
       handle_touch_event(event);
     }
-    vTaskDelay(pdMS_TO_TICKS(50));  // 50ms = responsive touch
+    vTaskDelay(pdMS_TO_TICKS(100));  // 100ms polling, responsive enough for tap/hold
   }
 }
 #endif
