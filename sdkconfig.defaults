@@ -7,8 +7,9 @@ CONFIG_APP_REPRODUCIBLE_BUILD=y
 # Length of the SHA256 hash of the ELF file stored in the app header.
 CONFIG_APP_RETRIEVE_LEN_ELF_SHA=16
 
-# Optimize for performance (-O2) instead of size (-Os).
-CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# Optimize for size (-Os) to reduce IRAM/flash usage (~10-30KB savings).
+# CPU-intensive WebP decoding uses a prebuilt library unaffected by this.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
 # Configure the flasher for 8MB of flash memory.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
