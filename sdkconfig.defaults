@@ -60,8 +60,9 @@ CONFIG_FREERTOS_USE_TRACE_FACILITY=y
 # Enable per-task CPU usage tracking for runtime performance analysis.
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 
-# Set FreeRTOS tick rate to 1ms (standard for high precision).
-CONFIG_FREERTOS_HZ=1000
+# Set FreeRTOS tick rate to 4ms. Animation frame timing is 10ms+ minimum,
+# so 250Hz provides sufficient resolution while reducing tick interrupt overhead.
+CONFIG_FREERTOS_HZ=250
 
 # Increase stack size for the internal FreeRTOS timer task.
 # The default is too small.
