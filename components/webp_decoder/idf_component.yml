@@ -1,0 +1,4 @@
+dependencies:
+  libwebp:
+    git: https://github.com/datagutt/libwebp.git
+    version: main

@@ -18,7 +18,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <http_parser.h>
-#include <webp/demux.h>
+#include "webp_decoder.h"
 
 #include "assets.h"
 #include "display.h"
@@ -91,14 +91,13 @@ struct PlayerContext {
   const char* embedded_name = nullptr;
 
   // Decoder
-  WebPAnimDecoder* decoder = nullptr;
-  WebPData webp_data = {nullptr, 0};
-  WebPAnimInfo anim_info = {};
+  WebpDecoder decoder;
+  WebpDecoderInfo decoder_info = {};
+  uint8_t* frame_buf = nullptr;
 
   // Timing
   TickType_t next_frame_tick = 0;
   int64_t playback_start_us = 0;
-  int last_timestamp = 0;
 
   // Error tracking
   int decode_error_count = 0;
@@ -122,12 +121,12 @@ bool is_static_asset(const void* ptr) {
 //------------------------------------------------------------------------------
 
 void destroy_decoder() {
-  if (ctx.decoder) {
-    WebPAnimDecoderDelete(ctx.decoder);
-    ctx.decoder = nullptr;
+  ctx.decoder = WebpDecoder();  // Reset to default
+  ctx.decoder_info = {};
+  if (ctx.frame_buf) {
+    free(ctx.frame_buf);
+    ctx.frame_buf = nullptr;
   }
-  ctx.webp_data = {nullptr, 0};
-  ctx.last_timestamp = 0;
 }
 
 bool create_decoder() {
@@ -138,48 +137,35 @@ bool create_decoder() {
     return false;
   }
 
-  ctx.webp_data.bytes = static_cast<const uint8_t*>(ctx.webp_buf);
-  ctx.webp_data.size = ctx.webp_len;
-
-  WebPAnimDecoderOptions opts;
-  WebPAnimDecoderOptionsInit(&opts);
-  opts.color_mode = MODE_RGBA;
-
-  ctx.decoder = WebPAnimDecoderNew(&ctx.webp_data, &opts);
-  if (!ctx.decoder) {
-    ESP_LOGE(TAG, "Failed to create decoder");
+  esp_err_t err = ctx.decoder.init(
+      static_cast<const uint8_t*>(ctx.webp_buf), ctx.webp_len);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Decoder init failed: %s", esp_err_to_name(err));
     return false;
   }
 
-  if (!WebPAnimDecoderGetInfo(ctx.decoder, &ctx.anim_info)) {
-    WebPAnimDecoderDelete(ctx.decoder);
-    ctx.decoder = nullptr;
-    ESP_LOGE(TAG, "Failed to get anim info");
-    return false;
-  }
+  ctx.decoder_info = ctx.decoder.get_info();
 
-  if (ctx.anim_info.canvas_width == 0 || ctx.anim_info.canvas_height == 0) {
-    ESP_LOGE(TAG, "Invalid WebP dimensions: %ux%u",
-             ctx.anim_info.canvas_width, ctx.anim_info.canvas_height);
-    WebPAnimDecoderDelete(ctx.decoder);
-    ctx.decoder = nullptr;
-    return false;
-  }
-
-  size_t frame_size = (size_t)ctx.anim_info.canvas_width *
-                      ctx.anim_info.canvas_height * 4;  // RGBA
+  size_t frame_size = static_cast<size_t>(ctx.decoder_info.canvas_width) *
+                      ctx.decoder_info.canvas_height * 4;
   if (frame_size > CONFIG_HTTP_BUFFER_SIZE_MAX) {
     ESP_LOGE(TAG, "Decoded frame too large: %zu bytes (%ux%u)",
-             frame_size, ctx.anim_info.canvas_width,
-             ctx.anim_info.canvas_height);
-    WebPAnimDecoderDelete(ctx.decoder);
-    ctx.decoder = nullptr;
+             frame_size, ctx.decoder_info.canvas_width,
+             ctx.decoder_info.canvas_height);
+    ctx.decoder = WebpDecoder();
+    return false;
+  }
+
+  ctx.frame_buf = static_cast<uint8_t*>(malloc(frame_size));
+  if (!ctx.frame_buf) {
+    ESP_LOGE(TAG, "Failed to allocate frame buffer (%zu bytes)", frame_size);
+    ctx.decoder = WebpDecoder();
     return false;
   }
 
   ESP_LOGI(TAG, "Decoder created: %u frames, %ux%u",
-           ctx.anim_info.frame_count, ctx.anim_info.canvas_width,
-           ctx.anim_info.canvas_height);
+           ctx.decoder_info.frame_count, ctx.decoder_info.canvas_width,
+           ctx.decoder_info.canvas_height);
   return true;
 }
 
@@ -206,7 +192,7 @@ void emit_playing_event() {
   evt.duration_ms = (ctx.dwell_secs > 0)
                         ? static_cast<uint32_t>(ctx.dwell_secs) * 1000
                         : 0;
-  evt.frame_count = ctx.anim_info.frame_count;
+  evt.frame_count = ctx.decoder_info.frame_count;
   esp_event_post(GFX_PLAYER_EVENTS, GFX_PLAYER_EVT_PLAYING,
                  &evt, sizeof(evt), 0);
 }
@@ -278,7 +264,6 @@ bool start_playback() {
 
   ctx.playback_start_us = esp_timer_get_time();
   ctx.next_frame_tick = xTaskGetTickCount();
-  ctx.last_timestamp = 0;
   ctx.state.store(State::PLAYING);
   xEventGroupClearBits(ctx.event_group, BIT_IDLE);
 
@@ -403,18 +388,9 @@ void handle_pending_command(bool emit_stopped_before_replace = false) {
 //------------------------------------------------------------------------------
 
 int decode_and_render_frame() {
-  if (!ctx.decoder) return -1;
+  if (!ctx.decoder.is_valid()) return -1;
 
-  // Check for loop completion
-  if (!WebPAnimDecoderHasMoreFrames(ctx.decoder)) {
-    WebPAnimDecoderReset(ctx.decoder);
-    ctx.last_timestamp = 0;
-  }
-
-  // Get next frame
-  uint8_t* pix = nullptr;
-  int timestamp = 0;
-  if (!WebPAnimDecoderGetNext(ctx.decoder, &pix, &timestamp)) {
+  if (ctx.decoder.get_next_frame(ctx.frame_buf) != ESP_OK) {
     return -1;
   }
 
@@ -423,22 +399,20 @@ int decode_and_render_frame() {
 
   // Render frame
 #ifdef CONFIG_DISPLAY_FRAME_SYNC
-  display_draw_buffer(pix, ctx.anim_info.canvas_width,
-                      ctx.anim_info.canvas_height);
+  display_draw_buffer(ctx.frame_buf, ctx.decoder_info.canvas_width,
+                      ctx.decoder_info.canvas_height);
   display_wait_frame(50);
   display_flip();
 #else
-  display_draw(pix, ctx.anim_info.canvas_width,
-               ctx.anim_info.canvas_height);
+  display_draw(ctx.frame_buf, ctx.decoder_info.canvas_width,
+               ctx.decoder_info.canvas_height);
 #endif
 
-  // Calculate delay
-  int delay_ms = timestamp - ctx.last_timestamp;
-  ctx.last_timestamp = timestamp;
+  int delay_ms = static_cast<int>(ctx.decoder.get_frame_delay());
 
   // Static image: sleep for remaining dwell time (check_dwell_expired handles
   // the actual stop, so we just need to hold the frame on screen).
-  if (ctx.anim_info.frame_count == 1) {
+  if (!ctx.decoder_info.is_animated) {
     if (ctx.dwell_secs > 0) {
       int64_t dwell_us = static_cast<int64_t>(ctx.dwell_secs) * 1000000;
       int64_t elapsed_us = esp_timer_get_time() - ctx.playback_start_us;
