@@ -1,7 +1,6 @@
 #include "webp_decoder.h"
 
 #include <cstring>
-#include <vector>
 
 #include <esp_log.h>
 #include <webp/decode.h>
@@ -21,8 +20,8 @@ struct WebpDecoder::Impl {
     int last_timestamp = 0;
     uint32_t current_frame_delay_ms = 0;
 
-    // Static
-    std::vector<uint8_t> still_rgba;
+    // Static: decode on-demand from source data (no pre-decoded buffer needed)
+    bool still_decoded = false;
 
     ~Impl() {
         if (anim_decoder) {
@@ -94,20 +93,10 @@ esp_err_t WebpDecoder::init(const uint8_t* data, size_t size) {
                  p->info.frame_count, p->info.canvas_width,
                  p->info.canvas_height);
     } else {
-        // Static path: pre-decode into buffer
+        // Static path: validate by checking features only; actual decode
+        // happens on-demand in get_next_frame() to avoid a separate buffer.
         p->info.frame_count = 1;
-
-        size_t frame_size = static_cast<size_t>(p->info.canvas_width) *
-                            p->info.canvas_height * 4;
-        p->still_rgba.resize(frame_size);
-
-        if (!WebPDecodeRGBAInto(data, size, p->still_rgba.data(),
-                                frame_size,
-                                static_cast<int>(p->info.canvas_width * 4))) {
-            ESP_LOGE(TAG, "Failed to decode static WebP");
-            return ESP_FAIL;
-        }
-
+        p->still_decoded = false;
         p->current_frame_delay_ms = 0;
 
         ESP_LOGI(TAG, "Static: %ux%u",
@@ -127,10 +116,20 @@ esp_err_t WebpDecoder::get_next_frame(uint8_t* rgba_out) {
     if (!impl_ || !rgba_out) return ESP_ERR_INVALID_STATE;
 
     if (!impl_->info.is_animated) {
-        // Static: just memcpy the pre-decoded buffer
-        size_t frame_size = static_cast<size_t>(impl_->info.canvas_width) *
-                            impl_->info.canvas_height * 4;
-        memcpy(rgba_out, impl_->still_rgba.data(), frame_size);
+        // Static: decode directly into the caller's buffer (no intermediate
+        // copy). Only decode once; subsequent calls are a no-op since the
+        // caller's buffer already holds the pixels.
+        if (!impl_->still_decoded) {
+            size_t frame_size = static_cast<size_t>(impl_->info.canvas_width) *
+                                impl_->info.canvas_height * 4;
+            if (!WebPDecodeRGBAInto(impl_->data, impl_->data_size, rgba_out,
+                                    frame_size,
+                                    static_cast<int>(impl_->info.canvas_width * 4))) {
+                ESP_LOGE(TAG, "Failed to decode static WebP");
+                return ESP_FAIL;
+            }
+            impl_->still_decoded = true;
+        }
         impl_->current_frame_delay_ms = 0;
         return ESP_OK;
     }
@@ -173,6 +172,7 @@ esp_err_t WebpDecoder::reset() {
     }
     impl_->last_timestamp = 0;
     impl_->current_frame_delay_ms = 0;
+    impl_->still_decoded = false;
     return ESP_OK;
 }
 
