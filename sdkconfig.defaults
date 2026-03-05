@@ -117,7 +117,8 @@ CONFIG_LWIP_SO_LINGER=y
 
 # Increase max sockets from default 10 to support concurrent httpd, WebSocket
 # client, mDNS, DNS, and SNTP connections without exhaustion under load.
-CONFIG_LWIP_MAX_SOCKETS=32
+# 16 covers ~10-12 concurrent connections with headroom; saves ~8KB vs 32.
+CONFIG_LWIP_MAX_SOCKETS=16
 
 # Allow checking for available data on a netconn.
 CONFIG_LWIP_SO_RCVBUF=y
