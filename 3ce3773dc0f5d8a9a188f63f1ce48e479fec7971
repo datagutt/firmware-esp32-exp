@@ -1,0 +1,23 @@
+components/webp_decoder/webp_decoder.cpp
+  2da85868c1816fb8 23-24,96-97,99,119-122,125-132,175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.8",
+  "base_commit_sha": "3ce3773dc0f5d8a9a188f63f1ce48e479fec7971",
+  "prompts": {
+    "2da85868c1816fb8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5282966-2b06-4f00-bbd4-87387ba19e32",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 20,
+      "accepted_lines": 18,
+      "overriden_lines": 0
+    }
+  }
+}
