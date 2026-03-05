@@ -1,0 +1,23 @@
+main/webp_player/webp_player.cpp
+  2da85868c1816fb8 127,160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.8",
+  "base_commit_sha": "f7459e49b3d1c8fdef88c141eac91a2d5ee438aa",
+  "prompts": {
+    "2da85868c1816fb8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5282966-2b06-4f00-bbd4-87387ba19e32",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
