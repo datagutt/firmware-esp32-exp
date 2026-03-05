@@ -101,6 +101,7 @@ struct PlayerContext {
 
   // Error tracking
   int decode_error_count = 0;
+  bool static_rendered = false;
   bool initialized = false;
 };
 
@@ -258,6 +259,7 @@ void goto_idle() {
 
 bool start_playback() {
   ctx.decode_error_count = 0;
+  ctx.static_rendered = false;
 
   if (!create_decoder()) {
     return false;
@@ -391,6 +393,22 @@ void handle_pending_command(bool emit_stopped_before_replace = false) {
 int decode_and_render_frame() {
   if (!ctx.decoder.is_valid()) return -1;
 
+  // Static images: after the first render, the DMA buffer holds the frame.
+  // Skip decode and display writes; just compute the sleep duration.
+  if (!ctx.decoder_info.is_animated && ctx.static_rendered) {
+    if (ctx.dwell_secs > 0) {
+      int64_t dwell_us = static_cast<int64_t>(ctx.dwell_secs) * 1000000;
+      int64_t elapsed_us = esp_timer_get_time() - ctx.playback_start_us;
+      int64_t remaining_us = dwell_us - elapsed_us;
+      if (remaining_us > 0) {
+        uint32_t remaining_ms = static_cast<uint32_t>(remaining_us / 1000);
+        return static_cast<int>(remaining_ms > 60000 ? 60000 : remaining_ms);
+      }
+      return 0;
+    }
+    return 60000;  // Unlimited duration: sleep up to 60s per iteration
+  }
+
   if (ctx.decoder.get_next_frame(ctx.frame_buf) != ESP_OK) {
     return -1;
   }
@@ -411,9 +429,9 @@ int decode_and_render_frame() {
 
   int delay_ms = static_cast<int>(ctx.decoder.get_frame_delay());
 
-  // Static image: sleep for remaining dwell time (check_dwell_expired handles
-  // the actual stop, so we just need to hold the frame on screen).
+  // Static image: mark as rendered and compute remaining dwell time.
   if (!ctx.decoder_info.is_animated) {
+    ctx.static_rendered = true;
     if (ctx.dwell_secs > 0) {
       int64_t dwell_us = static_cast<int64_t>(ctx.dwell_secs) * 1000000;
       int64_t elapsed_us = esp_timer_get_time() - ctx.playback_start_us;
@@ -426,7 +444,7 @@ int decode_and_render_frame() {
         delay_ms = 0;
       }
     } else {
-      delay_ms = 100;  // Unlimited duration static image
+      delay_ms = 60000;  // Unlimited duration: sleep up to 60s per iteration
     }
   }
 
