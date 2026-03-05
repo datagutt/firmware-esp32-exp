@@ -382,7 +382,8 @@ void handle_text_message(esp_websocket_event_data_t* data) {
     return;
   }
 
-  auto* buf = static_cast<char*>(malloc(data->data_len + 1));
+  auto* buf = static_cast<char*>(
+      heap_caps_malloc(data->data_len + 1, MALLOC_CAP_SPIRAM));
   if (!buf) {
     ESP_LOGE("handlers", "Failed to allocate text message buffer");
     return;
