@@ -107,7 +107,12 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
         state->dwell_secs = atoi(event->header_value);
       } else if (strcasecmp(event->header_key, "Tronbyt-OTA-URL") == 0) {
         if (state->ota_url) free(state->ota_url);
-        state->ota_url = strdup(event->header_value);
+        size_t url_len = strlen(event->header_value) + 1;
+        state->ota_url = static_cast<char*>(
+            heap_caps_malloc(url_len, MALLOC_CAP_SPIRAM));
+        if (state->ota_url) {
+          memcpy(state->ota_url, event->header_value, url_len);
+        }
         ESP_LOGI(TAG, "Found OTA URL: %s", state->ota_url);
       }
       break;

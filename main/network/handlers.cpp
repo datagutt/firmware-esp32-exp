@@ -224,8 +224,11 @@ void process_text_message(const char* json_str) {
   }
 
   if (has_ota_url) {
-    char* ota_url = strdup(ota_url_value);
+    size_t url_len = strlen(ota_url_value) + 1;
+    char* ota_url = static_cast<char*>(
+        heap_caps_malloc(url_len, MALLOC_CAP_SPIRAM));
     if (ota_url) {
+      memcpy(ota_url, ota_url_value, url_len);
       ESP_LOGI(TAG, "OTA URL received via WS: %s", ota_url);
       BaseType_t ota_rc = xTaskCreatePinnedToCoreWithCaps(
           ota_task_entry, "ota_task", 8192, ota_url, 5,
