@@ -1,0 +1,25 @@
+main/network/remote.cpp
+  2da85868c1816fb8 110-115
+main/network/handlers.cpp
+  2da85868c1816fb8 227-229,231
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.8",
+  "base_commit_sha": "bc75ce58b093c5d640f2a21337c14c2fec25e497",
+  "prompts": {
+    "2da85868c1816fb8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5282966-2b06-4f00-bbd4-87387ba19e32",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 10,
+      "total_deletions": 2,
+      "accepted_lines": 10,
+      "overriden_lines": 0
+    }
+  }
+}
