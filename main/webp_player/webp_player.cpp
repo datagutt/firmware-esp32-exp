@@ -124,7 +124,7 @@ void destroy_decoder() {
   ctx.decoder = WebpDecoder();  // Reset to default
   ctx.decoder_info = {};
   if (ctx.frame_buf) {
-    free(ctx.frame_buf);
+    heap_caps_free(ctx.frame_buf);
     ctx.frame_buf = nullptr;
   }
 }
@@ -156,7 +156,8 @@ bool create_decoder() {
     return false;
   }
 
-  ctx.frame_buf = static_cast<uint8_t*>(malloc(frame_size));
+  ctx.frame_buf = static_cast<uint8_t*>(
+      heap_caps_malloc(frame_size, MALLOC_CAP_SPIRAM));
   if (!ctx.frame_buf) {
     ESP_LOGE(TAG, "Failed to allocate frame buffer (%zu bytes)", frame_size);
     ctx.decoder = WebpDecoder();
