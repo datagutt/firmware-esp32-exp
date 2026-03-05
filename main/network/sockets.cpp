@@ -237,7 +237,7 @@ esp_err_t start_client() {
 
   esp_websocket_client_config_t ws_cfg = {};
   ws_cfg.uri = ctx.url;
-  ws_cfg.buffer_size = 8192;
+  ws_cfg.buffer_size = 4096;
   ws_cfg.crt_bundle_attach = esp_crt_bundle_attach;
   ws_cfg.reconnect_timeout_ms = 10000;
   ws_cfg.network_timeout_ms = 10000;
