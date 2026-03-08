@@ -231,20 +231,27 @@ This project is a modernized rewrite of the [original Tronbyt firmware](https://
 | **Display** | `ESP32-HUB75-MatrixPanel-DMA` | `esp-hub75` (datagutt/esp-hub75) |
 | **WebP** | `tronbyt/libwebp` | `datagutt/libwebp` (with Xtensa PIE) |
 | **WebSocket** | `esp_websocket_client` 1.6.0 | `esp_websocket_client` 1.6.1 |
-| **JSON** | — | `espressif/cjson` |
+| **JSON** | `cJSON` (ESP-IDF built-in) | `espressif/cjson` (explicit component) |
 | **mDNS** | — | `espressif/mdns` |
+| **Filesystem** | — | `joltwallet/littlefs` |
+
+### Improvements over Original
+
+- **Touch control** — original cycles 4 brightness levels (10/25/50/75%); this project cycles 3 (off/30%/100%) and reduces polling from 20Hz to 10Hz
+- **Brightness control** — original supports WebSocket and HTTP header control; this project adds REST API and touch control paths
+- **Oversize image protection** — original displays an oversize graphic; this project rejects at decode stage before rendering
+- **WebSocket keepalive** — client-side ping/pong (30s interval, 60s timeout) to detect dead connections
+- **FreeRTOS tick rate** — reduced from 1000Hz to 250Hz (saves CPU; animation frames are 10ms+ minimum)
+- **PSRAM allocation** — OTA URL strings and text message buffers allocated in PSRAM instead of DRAM
 
 ### Additional Features (not in original)
 
 - **Web UI dashboard** — built-in LittleFS web interface with WiFi status, setup page, and SPA routing (see [Web UI](#web-ui))
 - **OTA bundle updates** — single-file updates for app + WebUI via TBUP format (see [OTA Bundle Updates](#ota-bundle-updates))
 - **HTTP REST API** — status, health, diagnostics, system config, brightness, reboot, OTA upload, and timezone database endpoints (see [API Routes](#api-routes))
-- **API key authentication** — optional Bearer token auth for server communication (HTTP and WebSocket)
+- **OpenAPI spec** — full API documentation in [`api-docs.yaml`](api-docs.yaml)
 - **Event bus** — decoupled publish/subscribe architecture for system, network, display, and OTA events
 - **Application state machine** — boot, normal, config portal, OTA, and error states with connectivity tracking
-- **Touch control** — single tap (next app), double tap (cycle brightness), long hold (toggle display) on Tidbyt Gen 2
-- **Brightness control** — adjustable via REST API, WebSocket, or touch (0-100%)
-- **OpenAPI spec** — full API documentation in [`api-docs.yaml`](api-docs.yaml)
 - **USB Serial console** — interactive diagnostics via `CONFIG_ENABLE_CONSOLE`
 - **Heap monitor** — tracks memory usage with trend history
 - **Device temperature** — on-chip temperature sensor reading
@@ -257,7 +264,6 @@ This project is a modernized rewrite of the [original Tronbyt firmware](https://
 - **CORS support** — cross-origin requests enabled on all API endpoints
 - **Clean display shutdown** — `gfx_safe_restart` for graceful reboot
 - **OTA image validation** — checks app descriptor magic to reject merged binaries uploaded via portal
-- **Oversize image protection** — rejects WebP images exceeding display dimensions at decode stage
 - **WiFi resilience** — escalates repeated socket failures to WiFi reset and device restart
 
 ## Troubleshooting
