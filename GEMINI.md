@@ -1,97 +1,103 @@
-# Project Overview
+# CLAUDE.md
 
-This repository contains community-supported firmware for the Tidbyt hardware, designed to be built with native ESP-IDF. The firmware enables the device to display WebP images fetched from a URL or received via a WebSocket connection. It supports different Tidbyt hardware generations (Gen1, Gen2, S3) and other ESP32-based matrix displays.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-The firmware can be configured via a `secrets.json` file or via Kconfig (`idf.py menuconfig`). It also provides a WiFi configuration portal for easy setup.
+## Project Overview
 
-# Building and Running
+Community-supported firmware for Tidbyt hardware (and other ESP32-based matrix displays), built with native ESP-IDF. Displays WebP images fetched via HTTP polling or WebSocket. Written in C++ with `extern "C"` public APIs in headers.
 
-## Prerequisites
-
-- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html) (Native)
-- [Python 3](https://www.python.org/)
-
-## Configuration
-
-1.  **Clone the repository**:
-    ```bash
-    git clone <repo-url>
-    ```
-
-2.  **Secrets**:
-    Copy `secrets.json.example` to `secrets.json`. Edit it with your WiFi credentials and the URL for the image data. Values in `secrets.json` will automatically override Kconfig settings at build time.
-
-```json
-{
-    "WIFI_SSID": "myssiD",
-    "WIFI_PASSWORD": "<PASSWORD>",
-    "REMOTE_URL": "http://homeServer.local:8000/admin/tronbyt_1/next",
-}
-```
-
-3.  **Kconfig**:
-    Use `idf.py menuconfig` to configure hardware types, boot animations, and other system settings under the "Tronbyt Configuration" menu.
-
-## Initialize ESP-IDF tools
-    ```bash
-    . ~/esp/esp-idf/export.sh
-    ```
-
-## Building for Specific Hardware
-
-To build for a specific board, use the provided `sdkconfig.defaults.<board>` files or the convenience Makefile:
-
--   **Using Makefile**:
-    ```bash
-    make tidbyt-gen1
-    make tidbyt-gen2
-    make tronbyt-s3
-    ```
-
--   **Using idf.py directly**:
-    ```bash
-    idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tidbyt-gen1" build
-    ```
-
-## Flashing and Monitoring
+## Build Commands
 
 ```bash
+# Initialize ESP-IDF (required once per terminal session)
+. ~/esp/esp-idf/export.sh
+
+# Build for specific hardware targets
+make tidbyt-gen1        # ESP32
+make tidbyt-gen2        # ESP32
+make tronbyt-s3         # ESP32-S3
+make tronbyt-s3-wide    # ESP32-S3
+make pixoticker         # ESP32
+make matrixportal-s3    # ESP32-S3
+
+# Or build directly with idf.py
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tidbyt-gen1" build
+
+# Flash and monitor
 idf.py flash monitor
+
+# Configuration
+idf.py menuconfig       # Opens Kconfig UI under "Application Configuration"
+
+# Clean
+idf.py fullclean        # Full rebuild (also deletes sdkconfig)
 ```
 
-# Development Conventions
+Each `make <board>` target deletes sdkconfig, sets the IDF target, builds, and creates a merged binary.
 
--   The project uses native ESP-IDF for building, flashing, and monitoring.
--   Dependencies are managed via the `idf_component.yml` file.
--   Configuration is managed through `secrets.json` (overrides) and Kconfig.
--   Different hardware configurations are managed through board-specific `sdkconfig.defaults` files.
+## Configuration System
 
-# Configuration Strategy
+Two-tier configuration:
 
-The project employs a two-tiered configuration system:
+1. **Kconfig** (`Kconfig.projbuild` + `sdkconfig.defaults.*`): Structural settings that affect the binary — stack sizes, compiler optimization, log levels, pin assignments (`CONFIG_BUTTON_PIN`), board-specific hardware flags, feature flags (`ENABLE_AP_MODE`), LwIP tuning. Compiled into binary.
+2. **secrets.json**: Deployment-specific parameters — WiFi SSID/password, remote URL, brightness, refresh interval. Parsed by `generate_secrets_cmake.py` at build time into compiler defines via `secrets.cmake`.
 
-## 1. Build-Time Configuration (Kconfig / `sdkconfig`)
-Used for:
-- **System Settings:** Stack sizes, compiler optimization, log levels.
-- **Hardware Definition:** Pin assignments (`CONFIG_BUTTON_PIN`), board-specific hardware flags.
-- **Feature Flags:** Enabling/disabling core modules (e.g., `ENABLE_AP_MODE` logic via preprocessor defines).
-- **Network Defaults:** LwIP tuning (IPv6 support, buffer sizes).
+**Override priority** (highest wins): NVS (captive portal / WebSocket commands) > `secrets.json` (build-time) > Kconfig defaults
 
-These settings are defined in `Kconfig.projbuild` and `sdkconfig.defaults` (per-environment). They compile into the firmware binary.
+Use Kconfig for structural changes that affect code or memory layout. Use secrets.json for parameters that vary between deployments or need runtime configurability via NVS.
 
-## 2. Secrets & Runtime Configuration (`secrets.json`)
-Used for:
-- **Credentials:** WiFi SSID and Password.
-- **Deployment Settings:** Target Image URL (`REMOTE_URL`).
-- **Application Defaults:** Default brightness, refresh interval.
+Copy `secrets.json.example` to `secrets.json` before building.
 
-**Mechanism:**
-- `secrets.json` is parsed by `generate_secrets_cmake.py` during the build process.
-- Values are injected as compiler definitions (macros) via `secrets.cmake`.
-- **Runtime Override:** The firmware also checks Non-Volatile Storage (NVS) for these values (`ssid`, `password`, `image_url`). If the device is configured via the WiFi Captive Portal, the NVS values take precedence over the hardcoded `secrets.json` defaults.
+## Architecture
 
-**Best Practice:**
-- Use **Kconfig** for structural changes that affect the binary code or memory layout.
-- Use **secrets.json** for parameters that vary between deployments or need to be user-configurable without recompiling (via NVS fallback).
-- The firmware is written in C/C++.
-- The code is formatted using the rules in .clang-format.
+### Source Layout (`main/`)
+
+| Directory | Purpose |
+|-----------|---------|
+| `main.cpp` | Entry point (`app_main`), boot mode detection |
+| `startup/` | `runtime_orchestrator` — event-driven init with WiFi validation |
+| `scheduler/` | `scheduler_fsm` — playback state machine, HTTP prefetch |
+| `webp_player/` | WebP decode + render task with frame timing |
+| `display/` | HUB75 LED matrix driver abstraction (uses `esp-hub75` component) |
+| `network/` | WiFi STA, WebSocket client (`sockets`), HTTP fetch (`remote`), REST API (`sta_api`), mDNS, message parsing (`handlers`, `messages`), API validation, config contract, WebUI server |
+| `config/` | NVS settings, captive portal AP mode, DNS wrapper, HTML templates |
+| `system/` | OTA updates, heap monitor, syslog, NTP, app state machine, event bus, diagnostics, device temperature, console |
+
+### Key Patterns
+
+- **Event bus** (`system/event_bus`): Decoupled pub/sub for system, network, display, and OTA events
+- **App state machine** (`system/app_state`): Boot → Normal → Config Portal / OTA / Error states
+- **RAII** (`raii_utils.hpp`): `MutexGuard` wrapper for FreeRTOS semaphores
+- **Anonymous namespaces** for file-scoped statics (C++ idiom, no `static` globals)
+- **`extern "C"` guards** in all `.h` files for C/C++ interop
+- **No STL containers** — fixed arrays, `heap_caps_malloc` for PSRAM
+- **No exceptions / RTTI** (ESP-IDF default)
+
+### Dependencies (managed via `idf_component.yml`)
+
+- `esp-hub75` (datagutt/esp-hub75) — HUB75 LED matrix driver
+- `libwebp` (datagutt/libwebp) — WebP decoding with Xtensa PIE
+- `esp_websocket_client` — WebSocket connectivity
+- `espressif/cjson` — JSON parsing
+- `espressif/mdns` — mDNS service advertisement
+- `joltwallet/littlefs` — LittleFS for WebUI partition
+
+### Supported Boards
+
+ESP32: tidbyt-gen1, tidbyt-gen2, pixoticker
+ESP32-S3: tronbyt-s3, tronbyt-s3-wide, matrixportal-s3, matrixportal-s3-waveshare
+
+## Code Style
+
+- Formatted with clang-format using **Google** style (`BasedOnStyle: Google`)
+- C++ internals: anonymous namespaces, `enum class`, `constexpr`, `std::atomic`
+- C public APIs: free functions with `extern "C"` linkage in headers
+- ESP-IDF logging macros (`ESP_LOGI`, `ESP_LOGE`, `ESP_LOGW`) with per-file `TAG`
+
+## CI
+
+GitHub Actions workflow (`.github/workflows/main.yml`) builds firmware and injects version from git tags. Local builds show "vdev"; tagged builds show the tag version.
+
+## Version Injection
+
+`main/version.h` defaults to `"dev"`. CI overwrites it with the git tag. The version displays on the LED matrix at boot for 1 second.
