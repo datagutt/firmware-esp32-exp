@@ -241,6 +241,8 @@ esp_err_t start_client() {
   ws_cfg.crt_bundle_attach = esp_crt_bundle_attach;
   ws_cfg.reconnect_timeout_ms = 10000;
   ws_cfg.network_timeout_ms = 10000;
+  ws_cfg.ping_interval_sec = 30;
+  ws_cfg.pingpong_timeout_sec = 60;
 
   ws_cfg.enable_close_reconnect = true;
 
