@@ -277,6 +277,9 @@ void process_text_message(const char* json_str) {
     cfg.prefer_ipv6 = val;
     ESP_LOGI(TAG, "Updated prefer_ipv6 to %d", val);
     settings_changed = true;
+    if (val) {
+      wifi_enable_ipv6();
+    }
   }
 
   if (has_hostname) {

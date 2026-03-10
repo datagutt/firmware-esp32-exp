@@ -347,6 +347,13 @@ bool wifi_is_connected(void) {
   return (xEventGroupGetBits(s_wifi_event_group) & WIFI_CONNECTED_BIT) != 0;
 }
 
+void wifi_enable_ipv6(void) {
+  if (!s_sta_netif) return;
+  if (!wifi_is_connected()) return;
+  ESP_LOGI(TAG, "Enabling IPv6 link-local address at runtime");
+  esp_netif_create_ip6_linklocal(s_sta_netif);
+}
+
 bool wifi_wait_for_connection(uint32_t timeout_ms) {
   ESP_LOGI(TAG, "Waiting for WiFi connection (timeout: %lu ms)",
            static_cast<unsigned long>(timeout_ms));

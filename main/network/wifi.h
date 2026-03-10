@@ -101,6 +101,11 @@ void wifi_get_diag_stats(wifi_diag_stats_t* out);
 void wifi_health_check(void);
 
 /**
+ * @brief Enable IPv6 link-local address on an already-connected interface
+ */
+void wifi_enable_ipv6(void);
+
+/**
  * @brief Apply power save mode from settings
  */
 void wifi_apply_power_save(void);
