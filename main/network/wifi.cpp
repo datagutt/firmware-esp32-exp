@@ -53,6 +53,10 @@ uint32_t s_disconnect_streak = 0;
 int64_t s_disconnect_window_start_us = 0;
 uint32_t s_health_disconnect_checks = 0;
 
+esp_timer_handle_t s_health_timer = nullptr;
+constexpr int64_t HEALTH_CHECK_INTERVAL_US = 30000 * 1000;  // 30 seconds
+void health_timer_callback(void*) { wifi_health_check(); }
+
 void handle_successful_ip_acquisition() {
   s_reconnect_attempts = 0;
   s_connection_given_up = false;
@@ -251,11 +255,25 @@ int wifi_initialize(const char* ssid, const char* password) {
     s_connection_given_up = true;
   }
 
+  // Create health check timer (runs in all modes: WS and HTTP)
+  esp_timer_create_args_t health_args = {};
+  health_args.callback = health_timer_callback;
+  health_args.name = "wifi_health";
+  health_args.skip_unhandled_events = true;
+  esp_timer_create(&health_args, &s_health_timer);
+  esp_timer_start_periodic(s_health_timer, HEALTH_CHECK_INTERVAL_US);
+
   ESP_LOGI(TAG, "WiFi initialized successfully");
   return 0;
 }
 
 void wifi_shutdown(void) {
+  if (s_health_timer) {
+    esp_timer_stop(s_health_timer);
+    esp_timer_delete(s_health_timer);
+    s_health_timer = nullptr;
+  }
+
   ap_stop();
   esp_wifi_stop();
   esp_wifi_deinit();
@@ -384,6 +402,8 @@ void wifi_health_check(void) {
     if (s_wifi_disconnect_counter > 0) {
       s_wifi_disconnect_counter = 0;
     }
+    s_connection_given_up = false;
+    s_reconnect_attempts = 0;
     return;
   }
 

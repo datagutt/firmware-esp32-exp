@@ -34,8 +34,6 @@ const char* TAG = "sockets";
 constexpr int64_t RECONNECT_DELAY_US = 5000 * 1000;  // 5 seconds
 constexpr int64_t INITIAL_CONNECT_DELAY_US = 500 * 1000;  // 0.5 seconds
 constexpr int64_t GOT_IP_CONNECT_DELAY_US = 1500 * 1000;  // 1.5 seconds
-constexpr int64_t HEALTH_CHECK_INTERVAL_US = 30000 * 1000;  // 30 seconds
-
 // Socket failure escalation thresholds
 constexpr int MAX_SOCK_FAILURES_BEFORE_WIFI_RESET = 5;
 constexpr int MAX_WIFI_RESETS_BEFORE_RESTART = 3;
@@ -65,19 +63,10 @@ int wifi_disconnect_count = 0;
 
 // Timers
 esp_timer_handle_t reconnect_timer = nullptr;
-esp_timer_handle_t health_timer = nullptr;
 
 // Forward declarations
 esp_err_t start_client();
 void schedule_reconnect();
-
-// ---------------------------------------------------------------------------
-// Health check timer — replaces the old blocking wifi_health_check loop
-// ---------------------------------------------------------------------------
-
-void health_timer_callback(void*) {
-  wifi_health_check();
-}
 
 // ---------------------------------------------------------------------------
 // Reconnection (timer-based, no blocking loop)
@@ -138,10 +127,13 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGW(TAG, "Disconnected");
       draw_error_indicator_pixel();
-      if (ctx.state == State::Connected) {
-        ctx.state = State::Ready;
+      if (ctx.state != State::Ready) {
+        bool wifi_up = wifi_is_connected();
+        ctx.state = wifi_up ? State::Ready : State::Disconnected;
         event_bus_emit_simple(TRONBYT_EVENT_WS_DISCONNECTED);
-        app_state_set_connectivity(CONNECTIVITY_CONNECTED);
+        if (wifi_up) {
+          app_state_set_connectivity(CONNECTIVITY_CONNECTED);
+        }
         scheduler_on_ws_disconnect();
 
         sock_failure_count++;
@@ -184,8 +176,9 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
     case WEBSOCKET_EVENT_ERROR:
       ESP_LOGE(TAG, "WebSocket error");
       draw_error_indicator_pixel();
-      if (ctx.state == State::Connected) {
-        ctx.state = State::Ready;
+      if (ctx.state != State::Ready) {
+        bool wifi_up = wifi_is_connected();
+        ctx.state = wifi_up ? State::Ready : State::Disconnected;
         scheduler_on_ws_disconnect();
 
         sock_failure_count++;
@@ -334,14 +327,6 @@ void sockets_init(const char* url) {
   reconnect_args.skip_unhandled_events = true;
   esp_timer_create(&reconnect_args, &reconnect_timer);
 
-  // Create health check timer (replaces blocking wifi_health_check loop)
-  esp_timer_create_args_t health_args = {};
-  health_args.callback = health_timer_callback;
-  health_args.name = "sock_health";
-  health_args.skip_unhandled_events = true;
-  esp_timer_create(&health_args, &health_timer);
-  esp_timer_start_periodic(health_timer, HEALTH_CHECK_INTERVAL_US);
-
   // Subscribe to WiFi events via event bus for reconnection
   event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_event, nullptr);
   event_bus_subscribe(TRONBYT_EVENT_WIFI_DISCONNECTED, on_wifi_event, nullptr);
@@ -367,12 +352,6 @@ void sockets_deinit() {
     esp_timer_delete(reconnect_timer);
     reconnect_timer = nullptr;
   }
-  if (health_timer) {
-    esp_timer_stop(health_timer);
-    esp_timer_delete(health_timer);
-    health_timer = nullptr;
-  }
-
   // Unsubscribe from event bus
   event_bus_unsubscribe(on_wifi_event);
 
