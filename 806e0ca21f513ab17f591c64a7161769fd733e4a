@@ -1,0 +1,25 @@
+main/network/sockets.cpp
+  9f8f8a1167582a68 130-132,134,136,179-181
+main/network/wifi.cpp
+  9f8f8a1167582a68 56-59,258-265,271-276,405-406
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "806e0ca21f513ab17f591c64a7161769fd733e4a",
+  "prompts": {
+    "9f8f8a1167582a68": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64ca0743-1642-432b-83f8-8909969a7d30",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 29,
+      "total_deletions": 30,
+      "accepted_lines": 28,
+      "overriden_lines": 0
+    }
+  }
+}
