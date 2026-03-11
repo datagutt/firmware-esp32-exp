@@ -1,0 +1,31 @@
+main/display/display.cpp
+  1c724dc5829670af 369-370
+README.md
+  1c724dc5829670af 133
+main/display/display.h
+  1c724dc5829670af 26-27
+main/network/handlers.cpp
+  1c724dc5829670af 507-513
+main/webp_player/webp_player.cpp
+  1c724dc5829670af 263,272-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "ce590fbfd8f31b8ed5747f5ecf5de079cbf47baa",
+  "prompts": {
+    "1c724dc5829670af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cdd5e-e1f2-7340-8eb8-22ef4acefb9e",
+        "model": "gpt-5.4"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 147,
+      "total_deletions": 34,
+      "accepted_lines": 118,
+      "overriden_lines": 0
+    }
+  }
+}
