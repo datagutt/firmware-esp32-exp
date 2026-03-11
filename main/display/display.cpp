@@ -279,6 +279,16 @@ void display_set_brightness(uint8_t brightness_pct) {
 }
 
 void display_shutdown(void) {
+  if (_matrix == NULL) {
+#ifdef CONFIG_DISPLAY_FRAME_SYNC
+    if (_frame_sync_sem) {
+      vSemaphoreDelete(_frame_sync_sem);
+      _frame_sync_sem = NULL;
+    }
+#endif
+    return;
+  }
+
 #ifdef CONFIG_DISPLAY_FRAME_SYNC
   _matrix->set_frame_callback(nullptr, nullptr);
 #endif
