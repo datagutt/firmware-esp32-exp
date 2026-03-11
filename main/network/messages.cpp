@@ -78,7 +78,8 @@ esp_err_t msg_send_client_info_now() {
   if (json_str) {
     ESP_LOGI(TAG, "Sending client info: %s", json_str);
     int sent = esp_websocket_client_send_text(s_client, json_str,
-                                              strlen(json_str), portMAX_DELAY);
+                                              strlen(json_str),
+                                              pdMS_TO_TICKS(5000));
     if (sent < 0) {
       ESP_LOGE(TAG, "Failed to send client info: %d", sent);
       ret = ESP_FAIL;

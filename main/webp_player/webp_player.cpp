@@ -217,6 +217,8 @@ void emit_stopped_event() {
 // WebSocket Notifications
 //------------------------------------------------------------------------------
 
+constexpr TickType_t WS_SEND_TIMEOUT = pdMS_TO_TICKS(2000);
+
 void send_displaying_notification(int counter) {
   if (!ctx.ws_handle ||
       !esp_websocket_client_is_connected(ctx.ws_handle)) {
@@ -226,9 +228,13 @@ void send_displaying_notification(int counter) {
   int len =
       snprintf(message, sizeof(message), "{\"displaying\":%d}", counter);
   if (len > 0 && static_cast<size_t>(len) < sizeof(message)) {
-    esp_websocket_client_send_text(ctx.ws_handle, message, len,
-                                   portMAX_DELAY);
-    ESP_LOGD(TAG, "WS send: %s", message);
+    int sent = esp_websocket_client_send_text(ctx.ws_handle, message, len,
+                                              WS_SEND_TIMEOUT);
+    if (sent < 0) {
+      ESP_LOGW(TAG, "WS send timed out (displaying:%d)", counter);
+    } else {
+      ESP_LOGD(TAG, "WS send: %s", message);
+    }
   }
 }
 
@@ -241,9 +247,13 @@ void send_queued_notification(int counter) {
   int len =
       snprintf(message, sizeof(message), "{\"queued\":%d}", counter);
   if (len > 0 && static_cast<size_t>(len) < sizeof(message)) {
-    esp_websocket_client_send_text(ctx.ws_handle, message, len,
-                                   portMAX_DELAY);
-    ESP_LOGD(TAG, "WS Send: %s", message);
+    int sent = esp_websocket_client_send_text(ctx.ws_handle, message, len,
+                                              WS_SEND_TIMEOUT);
+    if (sent < 0) {
+      ESP_LOGW(TAG, "WS send timed out (queued:%d)", counter);
+    } else {
+      ESP_LOGD(TAG, "WS Send: %s", message);
+    }
   }
 }
 
@@ -354,6 +364,10 @@ void handle_pending_command(bool emit_stopped_before_replace = false) {
         ctx.state.load(std::memory_order_acquire) == State::PLAYING) {
       emit_stopped_event();
     }
+
+    // Clear stale error pixel early — before decoder creation which may fail
+    // and prevent start_playback() from reaching its own clear call.
+    clear_error_indicator_pixel();
 
     destroy_decoder();
     free_buffer();
@@ -573,7 +587,13 @@ void player_task(void*) {
         continue;
       }
 
-      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      // Use a periodic wake-up instead of infinite block so we can detect
+      // stale pending commands that arrived without a notification.
+      constexpr TickType_t IDLE_POLL_TICKS = pdMS_TO_TICKS(30000);
+      uint32_t got = ulTaskNotifyTake(pdTRUE, IDLE_POLL_TICKS);
+      if (!got && ctx.pending.valid.load(std::memory_order_acquire)) {
+        ESP_LOGW(TAG, "Idle wake: stale pending command detected, consuming");
+      }
 
       if (ctx.paused.load()) continue;
       handle_pending_command();
