@@ -1,0 +1,133 @@
+main/display/display.cpp
+  1c724dc5829670af 369-370
+main/network/handlers.cpp
+  1c724dc5829670af 508-513
+main/webp_player/webp_player.cpp
+  1c724dc5829670af 263,272-273
+main/display/display.h
+  1c724dc5829670af 26-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "c723bdf52ee6786c651ed794a762e910fd13a3f5",
+  "prompts": {
+    "1c724dc5829670af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cdd5e-e1f2-7340-8eb8-22ef4acefb9e",
+        "model": "gpt-5.4"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 147,
+      "total_deletions": 34,
+      "accepted_lines": 118,
+      "overriden_lines": 0
+    },
+    "2da85868c1816fb8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5282966-2b06-4f00-bbd4-87387ba19e32",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "3c8d182fdff98eef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0998ea25-c97a-4fde-817a-4fab2fa94955",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 43,
+      "total_deletions": 53,
+      "accepted_lines": 29,
+      "overriden_lines": 0
+    },
+    "561f14efa607f151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "17a9548d-1bd7-4030-9cfc-1154d024670a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "56c877c7be6bf528": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b03ab5e1-900e-43af-9656-2a1a91b0ab48",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 494,
+      "total_deletions": 10,
+      "accepted_lines": 512,
+      "overriden_lines": 0
+    },
+    "9f8f8a1167582a68": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64ca0743-1642-432b-83f8-8909969a7d30",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 29,
+      "total_deletions": 30,
+      "accepted_lines": 28,
+      "overriden_lines": 0
+    },
+    "a6343bea414f33fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "351ea576-7140-4895-b922-b799cb79f015",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 241,
+      "total_deletions": 96,
+      "accepted_lines": 149,
+      "overriden_lines": 0
+    },
+    "b412a1ebbd56d312": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "45543a1b-5a2b-43ee-a710-367636e29f91",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 7,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "d71c708bcdbf4a3a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7a3cc8ab-bdb8-477b-84f9-3b4693d7b5b7",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 8,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
