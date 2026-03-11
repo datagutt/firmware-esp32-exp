@@ -37,6 +37,8 @@ constexpr int DEFAULT_REFRESH_INTERVAL = CONFIG_REFRESH_INTERVAL_SECONDS;
 
 constexpr int CONSUMER_STACK_SIZE = 6144;
 constexpr int CONSUMER_PRIORITY = 4;
+constexpr int CONFIG_TASK_STACK_SIZE = 4096;
+constexpr int CONFIG_TASK_PRIORITY = 3;
 
 struct TextMsg {
   char* data;
@@ -44,6 +46,7 @@ struct TextMsg {
 };
 
 void consumer_task(void*);
+void config_persist_task(void*);
 
 int32_t s_dwell_secs = DEFAULT_REFRESH_INTERVAL;
 uint8_t* s_webp = nullptr;
@@ -55,6 +58,10 @@ TaskHandle_t s_consumer_task = nullptr;
 SemaphoreHandle_t s_text_mutex = nullptr;
 TextMsg s_pending_text = {nullptr, 0};
 uint32_t s_text_replace_count = 0;
+TaskHandle_t s_config_task = nullptr;
+SemaphoreHandle_t s_config_mutex = nullptr;
+system_config_t s_pending_config = {};
+bool s_pending_config_valid = false;
 
 bool ensure_text_mailbox_initialized() {
   if (s_text_mutex && s_consumer_task) {
@@ -95,11 +102,83 @@ bool ensure_text_mailbox_initialized() {
   return true;
 }
 
+bool ensure_config_persist_initialized() {
+  if (s_config_mutex && s_config_task) {
+    return true;
+  }
+
+  if (!s_config_mutex) {
+    s_config_mutex = xSemaphoreCreateMutex();
+    if (!s_config_mutex) {
+      ESP_LOGE(TAG, "Failed to create config persist mutex");
+      return false;
+    }
+  }
+
+  if (!s_config_task) {
+    BaseType_t rc = xTaskCreate(config_persist_task, "cfg_persist",
+                                CONFIG_TASK_STACK_SIZE, nullptr,
+                                CONFIG_TASK_PRIORITY, &s_config_task);
+    if (rc != pdPASS) {
+      ESP_LOGE(TAG, "Failed to create config persist task");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void queue_config_persist(const system_config_t& cfg) {
+  if (!ensure_config_persist_initialized()) {
+    ESP_LOGW(TAG, "Config persist task unavailable, applying synchronously");
+    config_set(&cfg);
+    msg_send_client_info();
+    return;
+  }
+
+  if (xSemaphoreTake(s_config_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    ESP_LOGW(TAG, "Config persist mutex busy, applying synchronously");
+    config_set(&cfg);
+    msg_send_client_info();
+    return;
+  }
+
+  s_pending_config = cfg;
+  s_pending_config_valid = true;
+  xSemaphoreGive(s_config_mutex);
+  xTaskNotifyGive(s_config_task);
+}
+
 void ota_task_entry(void* param) {
   auto* url = static_cast<char*>(param);
   run_ota(url);
   free(url);
   vTaskDelete(nullptr);
+}
+
+void config_persist_task(void*) {
+  while (true) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    system_config_t cfg = {};
+    bool have_cfg = false;
+    if (s_config_mutex &&
+        xSemaphoreTake(s_config_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      if (s_pending_config_valid) {
+        cfg = s_pending_config;
+        s_pending_config_valid = false;
+        have_cfg = true;
+      }
+      xSemaphoreGive(s_config_mutex);
+    }
+
+    if (!have_cfg) {
+      continue;
+    }
+
+    config_set(&cfg);
+    msg_send_client_info_now();
+  }
 }
 
 void process_text_message(const char* json_str) {
@@ -315,8 +394,7 @@ void process_text_message(const char* json_str) {
   }
 
   if (settings_changed) {
-    config_set(&cfg);
-    msg_send_client_info();
+    queue_config_persist(cfg);
   }
 
   cJSON* reboot_item = cJSON_GetObjectItem(root, "reboot");
@@ -356,6 +434,9 @@ void handlers_init() {
   if (ensure_text_mailbox_initialized()) {
     ESP_LOGI("handlers", "Text message mailbox initialized");
   }
+  if (ensure_config_persist_initialized()) {
+    ESP_LOGI("handlers", "Config persist task initialized");
+  }
 }
 
 void handlers_deinit() {
@@ -376,6 +457,17 @@ void handlers_deinit() {
     s_text_mutex = nullptr;
   }
   s_text_replace_count = 0;
+
+  if (s_config_task) {
+    vTaskDelete(s_config_task);
+    s_config_task = nullptr;
+  }
+
+  if (s_config_mutex) {
+    vSemaphoreDelete(s_config_mutex);
+    s_config_mutex = nullptr;
+  }
+  s_pending_config_valid = false;
 }
 
 void handle_text_message(esp_websocket_event_data_t* data) {

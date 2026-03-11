@@ -4,6 +4,8 @@
 
 #include <cJSON.h>
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "nvs_settings.h"
 #include "version.h"
@@ -16,14 +18,18 @@ const char* TAG = "messages";
 constexpr int WEBSOCKET_PROTOCOL_VERSION = 1;
 
 esp_websocket_client_handle_t s_client = nullptr;
+TaskHandle_t s_client_info_task = nullptr;
+
+void client_info_task(void*) {
+  while (true) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    msg_send_client_info_now();
+  }
+}
 
 }  // namespace
 
-void msg_init(esp_websocket_client_handle_t client) {
-  s_client = client;
-}
-
-esp_err_t msg_send_client_info() {
+esp_err_t msg_send_client_info_now() {
   if (!s_client) return ESP_ERR_INVALID_STATE;
 
   esp_err_t ret = ESP_OK;
@@ -84,4 +90,23 @@ esp_err_t msg_send_client_info() {
 
   cJSON_Delete(root);
   return ret;
+}
+
+void msg_init(esp_websocket_client_handle_t client) {
+  s_client = client;
+  if (!s_client_info_task) {
+    BaseType_t rc =
+        xTaskCreate(client_info_task, "client_info", 4096, nullptr, 4,
+                    &s_client_info_task);
+    if (rc != pdPASS) {
+      s_client_info_task = nullptr;
+      ESP_LOGE(TAG, "Failed to create client info task");
+    }
+  }
+}
+
+esp_err_t msg_send_client_info() {
+  if (!s_client || !s_client_info_task) return ESP_ERR_INVALID_STATE;
+  xTaskNotifyGive(s_client_info_task);
+  return ESP_OK;
 }
