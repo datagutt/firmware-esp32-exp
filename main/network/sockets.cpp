@@ -125,7 +125,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
       break;
 
     case WEBSOCKET_EVENT_DISCONNECTED:
-      ESP_LOGW(TAG, "Disconnected");
+      ESP_LOGW(TAG, "Disconnected (state=%d wifi=%d)",
+               static_cast<int>(ctx.state), wifi_is_connected());
       draw_error_indicator_pixel();
       if (ctx.state != State::Ready) {
         bool wifi_up = wifi_is_connected();
@@ -174,7 +175,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
       break;
 
     case WEBSOCKET_EVENT_ERROR:
-      ESP_LOGE(TAG, "WebSocket error");
+      ESP_LOGE(TAG, "WebSocket error (state=%d wifi=%d)",
+               static_cast<int>(ctx.state), wifi_is_connected());
       draw_error_indicator_pixel();
       if (ctx.state != State::Ready) {
         bool wifi_up = wifi_is_connected();

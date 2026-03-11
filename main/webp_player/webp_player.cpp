@@ -269,6 +269,7 @@ bool start_playback() {
   ctx.next_frame_tick = xTaskGetTickCount();
   ctx.state.store(State::PLAYING);
   xEventGroupClearBits(ctx.event_group, BIT_IDLE);
+  clear_error_indicator_pixel();
 
   send_displaying_notification(ctx.active_counter);
   emit_playing_event();

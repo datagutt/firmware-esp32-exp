@@ -343,8 +343,9 @@ void on_player_playing(const gfx_playing_evt_t* evt) {
   if (!evt) return;
 
   ESP_LOGI(TAG, "Player: PLAYING (source=%d, frames=%" PRIu32
-                ", duration=%" PRIu32 "ms)",
-           evt->source_type, evt->frame_count, evt->duration_ms);
+                ", duration=%" PRIu32 "ms, embedded=%s)",
+           evt->source_type, evt->frame_count, evt->duration_ms,
+           evt->embedded_name ? evt->embedded_name : "-");
 
   if (evt->source_type == GFX_SOURCE_RAM) {
     transition_to(State::PLAYING);
@@ -352,7 +353,9 @@ void on_player_playing(const gfx_playing_evt_t* evt) {
 }
 
 void on_player_stopped() {
-  ESP_LOGD(TAG, "Player: STOPPED");
+  ESP_LOGI(TAG, "Player: STOPPED (mode=%d state=%s prefetch_ready=%d)",
+           static_cast<int>(ctx.mode), state_name(ctx.state),
+           ctx.prefetch.ready.load());
 
   switch (ctx.mode) {
     case Mode::WEBSOCKET:
@@ -387,7 +390,10 @@ void on_player_stopped() {
 }
 
 void on_player_error(const gfx_error_evt_t* evt) {
-  ESP_LOGW(TAG, "Player: ERROR (code=%d)", evt ? evt->error_code : -1);
+  ESP_LOGW(TAG, "Player: ERROR (code=%d source=%d embedded=%s mode=%d state=%s)",
+           evt ? evt->error_code : -1, evt ? evt->source_type : -1,
+           (evt && evt->embedded_name) ? evt->embedded_name : "-",
+           static_cast<int>(ctx.mode), state_name(ctx.state));
 
   switch (ctx.mode) {
     case Mode::WEBSOCKET:

@@ -421,6 +421,9 @@ void handle_text_message(esp_websocket_event_data_t* data) {
 
 void handle_binary_message(esp_websocket_event_data_t* data) {
   if (data->op_code == 2 && data->payload_offset == 0) {
+    ESP_LOGI(TAG, "WS binary start: total=%d dwell=%" PRId32
+                  " first_image=%d",
+             data->payload_len, s_dwell_secs, s_first_image_received);
     if (s_webp) {
       ESP_LOGW(TAG, "Discarding incomplete previous WebP buffer");
       free(s_webp);
@@ -502,12 +505,14 @@ void handle_binary_message(esp_websocket_event_data_t* data) {
     if (counter < 0) {
       ESP_LOGE(TAG, "Failed to queue downloaded WebP");
       free(s_webp);
+    } else {
+      ESP_LOGI(TAG, "Queued WS image counter=%d size=%zu dwell=%" PRId32,
+               counter, s_ws_accumulated_len, s_dwell_secs);
     }
 
     if (counter >= 0 && !s_first_image_received) {
       ESP_LOGI(TAG,
                "First WebSocket image received - interrupting boot animation");
-      gfx_preempt();
       s_first_image_received = true;
     }
 

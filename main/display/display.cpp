@@ -366,6 +366,8 @@ void display_fill_rect(int x, int y, int w, int h, uint8_t r, uint8_t g,
 
 void draw_error_indicator_pixel(void) { display_draw_pixel(0, 0, 100, 0, 0); }
 
+void clear_error_indicator_pixel(void) { display_draw_pixel(0, 0, 0, 0, 0); }
+
 void display_text(const char *text, int x, int y, uint8_t r, uint8_t g,
                   uint8_t b, int scale) {
   if (_matrix == NULL || text == NULL) {
