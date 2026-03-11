@@ -8,6 +8,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 
+#include "diag_event_ring.h"
 #include "webui_server.h"
 
 namespace {
@@ -101,6 +102,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
 
   ESP_LOGI(TAG, "Writing to partition subtype %d at offset 0x%lx",
            update_partition->subtype, update_partition->address);
+  diag_event_log("INFO", "ota_start", 0, "HTTP upload OTA started");
 
   // Read first chunk and detect format
   int received = httpd_req_recv(
@@ -108,6 +110,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
       (req->content_len < OTA_BUF_SIZE ? req->content_len : OTA_BUF_SIZE));
   if (received <= 0) {
     ESP_LOGE(TAG, "Failed to receive first OTA chunk");
+    diag_event_log("ERROR", "ota_receive_fail", received,
+                   "Failed to receive first OTA chunk");
     free(buf);
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive failed");
     return ESP_FAIL;
@@ -127,6 +131,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
 
     if (static_cast<size_t>(received) < TBUP_HEADER_SIZE) {
       ESP_LOGE(TAG, "First chunk too small for TBUP header");
+      diag_event_log("ERROR", "ota_validate_fail", -1,
+                     "Bundle header too small");
       free(buf);
       httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid bundle header");
       return ESP_FAIL;
@@ -145,6 +151,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
       ESP_LOGE(TAG, "Content-Length %zu != header+app+webui (%lu)",
                req->content_len,
                (unsigned long)(TBUP_HEADER_SIZE + app_size + webui_size));
+      diag_event_log("ERROR", "ota_validate_fail", -1,
+                     "Bundle content length mismatch");
       free(buf);
       httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bundle size mismatch");
       return ESP_FAIL;
@@ -152,6 +160,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
 
     if (app_size == 0) {
       ESP_LOGE(TAG, "Bundle app_size is zero");
+      diag_event_log("ERROR", "ota_validate_fail", -1,
+                     "Bundle app size is zero");
       free(buf);
       httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty app in bundle");
       return ESP_FAIL;
@@ -171,6 +181,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
       if (app_magic != ESP_APP_DESC_MAGIC_WORD) {
         ESP_LOGE(TAG, "App in bundle has bad magic 0x%08lx at offset %u",
                  (unsigned long)app_magic, (unsigned)kAppDescOffset);
+        diag_event_log("ERROR", "ota_validate_fail", -1,
+                       "Bundle app image magic invalid");
         free(buf);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                             "Invalid app image in bundle");
@@ -183,6 +195,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
         esp_ota_begin(update_partition, app_size, &update_handle);
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "esp_ota_begin failed (%s)", esp_err_to_name(err));
+      diag_event_log("ERROR", "ota_begin_fail", err, "OTA begin failed");
       free(buf);
       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                           "OTA begin failed");
@@ -198,6 +211,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
                         app_size);
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "App streaming failed (%s)", esp_err_to_name(err));
+      diag_event_log("ERROR", "ota_write_fail", err, "App streaming failed");
       esp_ota_end(update_handle);
       free(buf);
       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
@@ -208,6 +222,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
     err = esp_ota_end(update_handle);
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "esp_ota_end failed (%s)", esp_err_to_name(err));
+      diag_event_log("ERROR", "ota_finish_fail", err, "OTA end failed");
       free(buf);
       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                           "OTA end failed");
@@ -218,6 +233,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)",
                esp_err_to_name(err));
+      diag_event_log("ERROR", "ota_set_boot_fail", err,
+                     "Set boot partition failed");
       free(buf);
       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                           "Set boot failed");
@@ -305,6 +322,9 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
 
     free(buf);
     ESP_LOGI(TAG, "Bundle OTA upload successful");
+    diag_event_log("INFO", "ota_success", 0,
+                   webui_size > 0 ? "Bundle OTA upload successful"
+                                  : "App-only OTA upload successful");
     return ESP_OK;
   }
 
@@ -324,6 +344,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
                "app binary?",
                (unsigned long)magic, (unsigned)kAppDescOffset,
                (unsigned long)ESP_APP_DESC_MAGIC_WORD);
+      diag_event_log("ERROR", "ota_validate_fail", -1,
+                     "Uploaded firmware image magic invalid");
       free(buf);
       httpd_resp_send_err(
           req, HTTPD_400_BAD_REQUEST,
@@ -336,6 +358,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
       esp_ota_begin(update_partition, req->content_len, &update_handle);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "esp_ota_begin failed (%s)", esp_err_to_name(err));
+    diag_event_log("ERROR", "ota_begin_fail", err, "OTA begin failed");
     free(buf);
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                         "OTA begin failed");
@@ -346,6 +369,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
   err = esp_ota_write(update_handle, buf, received);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "esp_ota_write failed (%s)", esp_err_to_name(err));
+    diag_event_log("ERROR", "ota_write_fail", err, "Initial OTA write failed");
     esp_ota_end(update_handle);
     free(buf);
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
@@ -361,6 +385,8 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
         continue;
       }
       ESP_LOGE(TAG, "File receive failed");
+      diag_event_log("ERROR", "ota_receive_fail", received,
+                     "OTA upload receive failed");
       esp_ota_end(update_handle);
       free(buf);
       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
@@ -371,6 +397,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
     err = esp_ota_write(update_handle, buf, received);
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "esp_ota_write failed (%s)", esp_err_to_name(err));
+      diag_event_log("ERROR", "ota_write_fail", err, "OTA write failed");
       esp_ota_end(update_handle);
       free(buf);
       httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
@@ -386,6 +413,7 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
   err = esp_ota_end(update_handle);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "esp_ota_end failed (%s)", esp_err_to_name(err));
+    diag_event_log("ERROR", "ota_finish_fail", err, "OTA end failed");
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA end failed");
     return ESP_FAIL;
   }
@@ -394,11 +422,14 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "esp_ota_set_boot_partition failed (%s)",
              esp_err_to_name(err));
+    diag_event_log("ERROR", "ota_set_boot_fail", err,
+                   "Set boot partition failed");
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                         "Set boot failed");
     return ESP_FAIL;
   }
 
   ESP_LOGI(TAG, "OTA upload successful");
+  diag_event_log("INFO", "ota_success", 0, "OTA upload successful");
   return ESP_OK;
 }

@@ -27,6 +27,10 @@ uint8_t s_count = 0;
 uint32_t s_seq = 0;
 bool s_enabled = false;
 
+bool is_ota_event(const char* type) {
+  return type && strncmp(type, "ota_", 4) == 0;
+}
+
 void sanitize(char* dst, size_t dst_len, const char* src) {
   if (!dst || dst_len == 0) return;
   if (!src) {
@@ -190,7 +194,7 @@ void diag_event_log(const char* level, const char* type, int32_t code,
   if (!s_initialized) {
     diag_event_ring_init();
   }
-  if (!s_mutex || !s_enabled) return;
+  if (!s_mutex || (!s_enabled && !is_ota_event(type))) return;
 
   if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
     return;
