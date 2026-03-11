@@ -1,0 +1,25 @@
+main/system/diag_event_ring.cpp
+  bb1e6cd3482697c8 30-33,197
+main/system/ota_http_upload.cpp
+  bb1e6cd3482697c8 11,105,113-114,134-135,154-155,163-164,184-185,198,214,225,236-237,325-327,347-348,361,372,388-389,400,416,425-426,433
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "a3f025745a6cf492fb7bc1ddb61c9b75a0d4d7f3",
+  "prompts": {
+    "bb1e6cd3482697c8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cddaf-bf7c-74a1-9e41-bd993d3ee8d4",
+        "model": "gpt-5.4"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 36,
+      "total_deletions": 1,
+      "accepted_lines": 36,
+      "overriden_lines": 0
+    }
+  }
+}
