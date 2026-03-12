@@ -71,11 +71,16 @@ bool config_contract_apply_patch(const config_contract_state_t* in_state,
                     patch->sntp_server, 0, "sntp_server", err, err_len)) {
     return false;
   }
+#ifdef CONFIG_LOCK_SERVER_URL
+  // Silently skip image_url changes when server URL is locked
+  (void)patch->has_image_url;
+#else
   if (patch->has_image_url &&
       !copy_checked(out_state->image_url, sizeof(out_state->image_url),
                     patch->image_url, 0, "image_url", err, err_len)) {
     return false;
   }
+#endif
   if (patch->has_api_key &&
       !copy_checked(out_state->api_key, sizeof(out_state->api_key),
                     patch->api_key, 0, "api_key", err, err_len)) {

@@ -1,4 +1,21 @@
-// Tronbyt Web UI — shared utilities
+// Web UI — shared utilities
+
+async function loadBrand() {
+  try {
+    var about = await api('GET', '/api/about');
+    if (about.brand) {
+      var name = about.brand.name || 'Device';
+      document.title = name + (document.title.includes('-')
+        ? ' -' + document.title.split('-').slice(1).join('-') : '');
+      var h1 = document.querySelector('header h1');
+      if (h1) h1.textContent = name;
+      if (about.brand.accent) {
+        document.documentElement.style.setProperty('--accent', about.brand.accent);
+      }
+      window._brand = about.brand;
+    }
+  } catch(e) {}
+}
 
 async function api(method, path, body) {
   const opts = {

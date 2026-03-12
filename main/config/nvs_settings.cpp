@@ -281,6 +281,23 @@ esp_err_t nvs_settings_init(void) {
     persist_to_nvs();
   }
 
+  // Apply brand default server URL if NVS has none and secrets.json had none
+  if (strlen(s_config.image_url) == 0 &&
+      strlen(CONFIG_DEFAULT_SERVER_URL) > 0) {
+    snprintf(s_config.image_url, sizeof(s_config.image_url), "%s",
+             CONFIG_DEFAULT_SERVER_URL);
+    ESP_LOGI(TAG, "Applied brand default server URL");
+  }
+
+#ifdef CONFIG_LOCK_SERVER_URL
+  // When server URL is locked, always override with the Kconfig value
+  if (strlen(CONFIG_DEFAULT_SERVER_URL) > 0) {
+    snprintf(s_config.image_url, sizeof(s_config.image_url), "%s",
+             CONFIG_DEFAULT_SERVER_URL);
+    ESP_LOGI(TAG, "Server URL locked to brand default");
+  }
+#endif
+
   ESP_LOGI(TAG, "Settings initialized. SSID: %s, URL: %s, AP Mode: %d",
            s_config.ssid, s_config.image_url, s_config.ap_mode);
 

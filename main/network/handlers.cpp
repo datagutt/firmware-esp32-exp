@@ -382,9 +382,13 @@ void process_text_message(const char* json_str) {
   }
 
   if (has_image_url) {
+#ifdef CONFIG_LOCK_SERVER_URL
+    ESP_LOGW(TAG, "image_url change ignored (server URL locked)");
+#else
     snprintf(cfg.image_url, sizeof(cfg.image_url), "%s", image_url_value);
     ESP_LOGI(TAG, "Updated image_url to %s", image_url_value);
     settings_changed = true;
+#endif
   }
 
   if (has_api_key) {

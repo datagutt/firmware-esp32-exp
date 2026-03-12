@@ -1,35 +1,29 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-extern const uint8_t ASSET_BOOT_WEBP[];
-extern const size_t ASSET_BOOT_WEBP_LEN;
-
-#if CONFIG_BOOT_WEBP_WINDYTRON
-#include "windytron_c"
-#elif CONFIG_BOOT_WEBP_PARROT
-#include "parrot_c"
-#else
-#include "tronbyt_c"
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-extern const uint8_t ASSET_CONFIG_WEBP[];
-extern const size_t ASSET_CONFIG_WEBP_LEN;
+typedef struct {
+  const char* name;
+  const uint8_t* data;
+  size_t size;
+} embedded_asset_t;
 
-#include "config_c"
+/// Get an embedded asset by name. Returns NULL if not found.
+const embedded_asset_t* asset_find(const char* name);
 
-extern const uint8_t ASSET_404_WEBP[];
-extern const size_t ASSET_404_WEBP_LEN;
+/// Check if a pointer belongs to any embedded asset (flash memory, not
+/// freeable).
+bool asset_is_static(const void* ptr);
 
-#include "404_c"
+/// Get the boot animation asset for the configured brand.
+const embedded_asset_t* asset_boot(void);
 
-extern const uint8_t ASSET_OVERSIZE_WEBP[];
-extern const size_t ASSET_OVERSIZE_WEBP_LEN;
-
-#include "oversize_c"
-
-extern const uint8_t ASSET_NOCONNECT_WEBP[];
-extern const size_t ASSET_NOCONNECT_WEBP_LEN;
-
-#include "no_connect_c"
+#ifdef __cplusplus
+}
+#endif

@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tronbyt</title>
+  <title>Device</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>Tronbyt</h1>
+      <h1>&nbsp;</h1>
       <nav>
         <a href="/" class="active">Dashboard</a>
         <a href="/settings.html">Settings</a>
@@ -166,6 +166,7 @@
 
     $('#brightness').addEventListener('input', onBrightnessChange);
 
+    loadBrand();
     loadStatus();
     loadAbout();
     loadConfig();

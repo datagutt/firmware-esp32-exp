@@ -87,6 +87,10 @@ Copy `secrets.json.example` to `secrets.json` before building.
 ESP32: tidbyt-gen1, tidbyt-gen2, pixoticker
 ESP32-S3: tronbyt-s3, tronbyt-s3-wide, matrixportal-s3, matrixportal-s3-waveshare
 
+## Branding
+
+See `docs/branding.md`. Assets pipeline in `resources/README.md`. Captive portal HTML uses `snprintf` — bare `%` in CSS must be escaped as `%%`.
+
 ## Code Style
 
 - Formatted with clang-format using **Google** style (`BasedOnStyle: Google`)

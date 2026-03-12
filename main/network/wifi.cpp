@@ -31,6 +31,7 @@
 #include "diag_event_ring.h"
 #include "event_bus.h"
 #include "nvs_settings.h"
+#include "sdkconfig.h"
 
 namespace {
 
@@ -195,8 +196,8 @@ int wifi_initialize(const char* ssid, const char* password) {
   if (strlen(hostname) == 0) {
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
-    snprintf(hostname, sizeof(hostname), "tronbyt-%02x%02x%02x", mac[3],
-             mac[4], mac[5]);
+    snprintf(hostname, sizeof(hostname), CONFIG_BRAND_NAME_LOWER "-%02x%02x%02x",
+             mac[3], mac[4], mac[5]);
     ESP_LOGI(TAG, "Generated default hostname: %s", hostname);
     snprintf(settings.hostname, sizeof(settings.hostname), "%s", hostname);
     config_set(&settings);

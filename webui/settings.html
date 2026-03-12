@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tronbyt - Settings</title>
+  <title>Device - Settings</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>Tronbyt</h1>
+      <h1>&nbsp;</h1>
       <nav>
         <a href="/">Dashboard</a>
         <a href="/settings.html" class="active">Settings</a>
@@ -43,7 +43,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="wifi-card">
       <h2>Wi-Fi &amp; Connection</h2>
       <p class="card-desc">
         Change Wi-Fi network, server URL, or API key.
@@ -131,6 +131,12 @@
       $('#brightness-val').textContent = this.value + '%';
     });
 
+    loadBrand().then(function() {
+      if (window._brand && window._brand.server_locked) {
+        var wifiCard = $('#wifi-card');
+        if (wifiCard) wifiCard.style.display = 'none';
+      }
+    });
     loadSettings();
   </script>
 </body>

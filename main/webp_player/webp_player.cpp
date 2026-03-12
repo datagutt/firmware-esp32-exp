@@ -111,11 +111,7 @@ PlayerContext ctx;
 // Static Asset Detection
 //------------------------------------------------------------------------------
 
-bool is_static_asset(const void* ptr) {
-  return ptr == ASSET_BOOT_WEBP || ptr == ASSET_CONFIG_WEBP ||
-         ptr == ASSET_404_WEBP || ptr == ASSET_OVERSIZE_WEBP ||
-         ptr == ASSET_NOCONNECT_WEBP;
-}
+bool is_static_asset(const void* ptr) { return asset_is_static(ptr); }
 
 //------------------------------------------------------------------------------
 // Decoder Management
@@ -685,9 +681,9 @@ int gfx_initialize(const char* img_url) {
            heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
 
   // Boot animation — use static asset directly
-  ctx.webp_buf =
-      const_cast<void*>(static_cast<const void*>(ASSET_BOOT_WEBP));
-  ctx.webp_len = ASSET_BOOT_WEBP_LEN;
+  auto* boot = asset_boot();
+  ctx.webp_buf = const_cast<void*>(static_cast<const void*>(boot->data));
+  ctx.webp_len = boot->size;
   ctx.dwell_secs = 0;
   ctx.active_counter = 0;
   ctx.source_type = GFX_SOURCE_EMBEDDED;
@@ -788,28 +784,8 @@ int gfx_get_loaded_counter(void) {
 }
 
 int gfx_play_embedded(const char* name, bool immediate) {
-  struct EmbeddedSprite {
-    const char* name;
-    const uint8_t* data;
-    size_t len;
-  };
-  static const EmbeddedSprite sprites[] = {
-      {"boot", ASSET_BOOT_WEBP, ASSET_BOOT_WEBP_LEN},
-      {"config", ASSET_CONFIG_WEBP, ASSET_CONFIG_WEBP_LEN},
-      {"error_404", ASSET_404_WEBP, ASSET_404_WEBP_LEN},
-      {"no_connect", ASSET_NOCONNECT_WEBP, ASSET_NOCONNECT_WEBP_LEN},
-      {"oversize", ASSET_OVERSIZE_WEBP, ASSET_OVERSIZE_WEBP_LEN},
-  };
-
-  const EmbeddedSprite* sprite = nullptr;
-  for (const auto& s : sprites) {
-    if (strcmp(name, s.name) == 0) {
-      sprite = &s;
-      break;
-    }
-  }
-
-  if (!sprite) {
+  const embedded_asset_t* asset = asset_find(name);
+  if (!asset) {
     ESP_LOGE(TAG, "Unknown embedded sprite: %s", name);
     return 1;
   }
@@ -833,12 +809,12 @@ int gfx_play_embedded(const char* name, bool immediate) {
   int counter = ctx.counter;
 
   ctx.pending.buf =
-      const_cast<void*>(static_cast<const void*>(sprite->data));
-  ctx.pending.len = sprite->len;
+      const_cast<void*>(static_cast<const void*>(asset->data));
+  ctx.pending.len = asset->size;
   ctx.pending.dwell_secs = 0;  // Embedded sprites loop forever
   ctx.pending.counter = counter;
   ctx.pending.source_type = GFX_SOURCE_EMBEDDED;
-  ctx.pending.embedded_name = sprite->name;
+  ctx.pending.embedded_name = asset->name;
   ctx.pending.valid.store(true, std::memory_order_release);
 
   ESP_LOGI(TAG, "Queued embedded sprite '%s' counter=%d", name, counter);
