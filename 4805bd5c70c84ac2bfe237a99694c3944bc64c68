@@ -1,0 +1,37 @@
+main/network/config_contract.h
+  2c430935f8841e8e 13,30-31
+main/config/nvs_settings.cpp
+  2c430935f8841e8e 29,105,187-190,249-251
+main/webp_player/webp_player.cpp
+  2c430935f8841e8e 683-684,692,710-716
+main/config/nvs_settings.h
+  2c430935f8841e8e 33
+main/network/config_contract.cpp
+  2c430935f8841e8e 49-50
+main/Kconfig.projbuild
+  2c430935f8841e8e 45-50
+main/network/handlers.cpp
+  2c430935f8841e8e 198,346-353
+main/network/messages.cpp
+  2c430935f8841e8e 74-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "4805bd5c70c84ac2bfe237a99694c3944bc64c68",
+  "prompts": {
+    "2c430935f8841e8e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b0f6f9bb-1a1b-49b9-b9bd-d633857f5f32",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>",
+      "messages": [],
+      "total_additions": 49,
+      "total_deletions": 9,
+      "accepted_lines": 42,
+      "overriden_lines": 0
+    }
+  }
+}
