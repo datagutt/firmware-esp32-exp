@@ -71,6 +71,8 @@ esp_err_t msg_send_client_info_now() {
   cJSON_AddNumberToObject(ci, "wifi_power_save", cfg.wifi_power_save);
   cJSON_AddBoolToObject(ci, "skip_display_version",
                         cfg.skip_display_version);
+  cJSON_AddBoolToObject(ci, "skip_boot_animation",
+                        cfg.skip_boot_animation);
   cJSON_AddBoolToObject(ci, "ap_mode", cfg.ap_mode);
   cJSON_AddBoolToObject(ci, "prefer_ipv6", cfg.prefer_ipv6);
 

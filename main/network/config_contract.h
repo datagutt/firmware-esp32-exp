@@ -10,6 +10,7 @@ typedef struct {
   bool swap_colors;
   int wifi_power_save;
   bool skip_display_version;
+  bool skip_boot_animation;
   bool ap_mode;
   bool prefer_ipv6;
   char hostname[33];
@@ -26,6 +27,8 @@ typedef struct {
   int wifi_power_save;
   bool has_skip_display_version;
   bool skip_display_version;
+  bool has_skip_boot_animation;
+  bool skip_boot_animation;
   bool has_ap_mode;
   bool ap_mode;
   bool has_prefer_ipv6;

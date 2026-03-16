@@ -26,6 +26,7 @@ constexpr const char* NVS_KEY_API_KEY = "api_key";
 constexpr const char* NVS_KEY_SWAP_COLORS = "swap_colors";
 constexpr const char* NVS_KEY_WIFI_POWER_SAVE = "wifi_ps";
 constexpr const char* NVS_KEY_SKIP_VERSION = "skip_ver";
+constexpr const char* NVS_KEY_SKIP_BOOT = "skip_boot";
 constexpr const char* NVS_KEY_AP_MODE = "ap_mode";
 constexpr const char* NVS_KEY_PREFER_IPV6 = "prefer_ipv6";
 
@@ -101,6 +102,7 @@ esp_err_t persist_to_nvs() {
   nvs.set_u8(NVS_KEY_WIFI_POWER_SAVE,
              static_cast<uint8_t>(s_config.wifi_power_save));
   nvs.set_u8(NVS_KEY_SKIP_VERSION, s_config.skip_display_version ? 1 : 0);
+  nvs.set_u8(NVS_KEY_SKIP_BOOT, s_config.skip_boot_animation ? 1 : 0);
   nvs.set_u8(NVS_KEY_AP_MODE, s_config.ap_mode ? 1 : 0);
   nvs.set_u8(NVS_KEY_PREFER_IPV6, s_config.prefer_ipv6 ? 1 : 0);
   nvs.commit();
@@ -182,6 +184,10 @@ esp_err_t nvs_settings_init(void) {
   s_config.skip_display_version = true;
 #endif
 
+#ifdef CONFIG_SKIP_BOOT_ANIMATION
+  s_config.skip_boot_animation = true;
+#endif
+
 #ifdef CONFIG_ENABLE_AP_MODE
   s_config.ap_mode = true;
 #endif
@@ -239,6 +245,9 @@ esp_err_t nvs_settings_init(void) {
 
       if (nvs.get_u8(NVS_KEY_SKIP_VERSION, &val_u8) == ESP_OK)
         s_config.skip_display_version = (val_u8 != 0);
+
+      if (nvs.get_u8(NVS_KEY_SKIP_BOOT, &val_u8) == ESP_OK)
+        s_config.skip_boot_animation = (val_u8 != 0);
 
       if (nvs.get_u8(NVS_KEY_AP_MODE, &val_u8) == ESP_OK)
         s_config.ap_mode = (val_u8 != 0);

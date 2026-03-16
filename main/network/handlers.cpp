@@ -195,6 +195,7 @@ void process_text_message(const char* json_str) {
                                       "brightness",      "ota_url",
                                       "swap_colors",     "wifi_power_save",
                                       "skip_display_version",
+                                      "skip_boot_animation",
                                       "ap_mode",         "prefer_ipv6",
                                       "hostname",        "syslog_addr",
                                       "sntp_server",     "image_url",
@@ -339,6 +340,14 @@ void process_text_message(const char* json_str) {
     bool val = cJSON_IsTrue(skip_ver_item);
     cfg.skip_display_version = val;
     ESP_LOGI(TAG, "Updated skip_display_version to %d", val);
+    settings_changed = true;
+  }
+
+  cJSON* skip_boot_item = cJSON_GetObjectItem(root, "skip_boot_animation");
+  if (cJSON_IsBool(skip_boot_item)) {
+    bool val = cJSON_IsTrue(skip_boot_item);
+    cfg.skip_boot_animation = val;
+    ESP_LOGI(TAG, "Updated skip_boot_animation to %d", val);
     settings_changed = true;
   }
 

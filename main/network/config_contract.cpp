@@ -46,6 +46,8 @@ bool config_contract_apply_patch(const config_contract_state_t* in_state,
   if (patch->has_swap_colors) out_state->swap_colors = patch->swap_colors;
   if (patch->has_skip_display_version)
     out_state->skip_display_version = patch->skip_display_version;
+  if (patch->has_skip_boot_animation)
+    out_state->skip_boot_animation = patch->skip_boot_animation;
   if (patch->has_ap_mode) out_state->ap_mode = patch->ap_mode;
   if (patch->has_prefer_ipv6) out_state->prefer_ipv6 = patch->prefer_ipv6;
 

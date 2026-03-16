@@ -680,14 +680,16 @@ int gfx_initialize(const char* img_url) {
   ESP_LOGI(TAG, "Largest heap block: %d",
            heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
 
-  // Boot animation — use static asset directly
-  auto* boot = asset_boot();
-  ctx.webp_buf = const_cast<void*>(static_cast<const void*>(boot->data));
-  ctx.webp_len = boot->size;
-  ctx.dwell_secs = 0;
-  ctx.active_counter = 0;
-  ctx.source_type = GFX_SOURCE_EMBEDDED;
-  ctx.embedded_name = "boot";
+  // Boot animation — use static asset directly (unless skipped)
+  if (!config_get().skip_boot_animation) {
+    auto* boot = asset_boot();
+    ctx.webp_buf = const_cast<void*>(static_cast<const void*>(boot->data));
+    ctx.webp_len = boot->size;
+    ctx.dwell_secs = 0;
+    ctx.active_counter = 0;
+    ctx.source_type = GFX_SOURCE_EMBEDDED;
+    ctx.embedded_name = "boot";
+  }
 
   ctx.mutex = xSemaphoreCreateMutex();
   if (!ctx.mutex) {
@@ -705,7 +707,13 @@ int gfx_initialize(const char* img_url) {
 
   if (display_initialize()) return 1;
 
-  if (!config_get().skip_display_version) {
+  auto cfg = config_get();
+
+  if (cfg.skip_boot_animation) {
+    display_clear();
+  }
+
+  if (!cfg.skip_display_version) {
     display_version_info(img_url);
   }
 

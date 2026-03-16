@@ -42,6 +42,12 @@ menu "Application Configuration"
         help
             Skip displaying the firmware version on boot.
 
+    config SKIP_BOOT_ANIMATION
+        bool "Skip Boot Animation"
+        default n
+        help
+            Skip the boot animation on startup.
+
     config PREFER_IPV6
         bool "Prefer IPv6"
         default n
