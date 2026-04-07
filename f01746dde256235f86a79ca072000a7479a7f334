@@ -1,0 +1,39 @@
+webui/ota.html
+  451f4058b2ead0ea 9-19
+webui/static/style.css
+  451f4058b2ead0ea 16,43
+main/config/html/success.html
+  451f4058b2ead0ea 9-15,21,25,30,33,35,38,41,46-54
+webui/static/app.js
+  451f4058b2ead0ea 3-14,24
+webui/index.html
+  451f4058b2ead0ea 9-19
+main/network/webui_server.cpp
+  451f4058b2ead0ea 59-62,68-69,142-170
+main/config/html/setup.html
+  451f4058b2ead0ea 15,24,82-92
+webui/settings.html
+  451f4058b2ead0ea 9-19
+main/config/ap.cpp
+  451f4058b2ead0ea 177-179,185-186,384-385,389
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "f01746dde256235f86a79ca072000a7479a7f334",
+  "prompts": {
+    "451f4058b2ead0ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "30a540c9-32e4-4199-be39-b5d6eb656c54",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "datagutt",
+      "messages": [],
+      "total_additions": 162,
+      "total_deletions": 61,
+      "accepted_lines": 127,
+      "overriden_lines": 0
+    }
+  }
+}
