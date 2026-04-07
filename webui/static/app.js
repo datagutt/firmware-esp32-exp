@@ -1,5 +1,17 @@
 // Web UI — shared utilities
 
+function applyAccent(hex) {
+  var r = parseInt(hex.slice(1,3), 16);
+  var g = parseInt(hex.slice(3,5), 16);
+  var b = parseInt(hex.slice(5,7), 16);
+  var s = document.documentElement.style;
+  s.setProperty('--accent', hex);
+  s.setProperty('--accent-dim', 'rgb(' + (r*.6|0) + ',' + (g*.6|0) + ',' + (b*.6|0) + ')');
+  s.setProperty('--accent-glow', 'rgba(' + r + ',' + g + ',' + b + ',0.12)');
+  s.setProperty('--accent-glow-md', 'rgba(' + r + ',' + g + ',' + b + ',0.25)');
+  s.setProperty('--accent-bg', 'rgba(' + r + ',' + g + ',' + b + ',0.03)');
+}
+
 async function loadBrand() {
   try {
     var about = await api('GET', '/api/about');
@@ -9,9 +21,7 @@ async function loadBrand() {
         ? ' -' + document.title.split('-').slice(1).join('-') : '');
       var h1 = document.querySelector('header h1');
       if (h1) h1.textContent = name;
-      if (about.brand.accent) {
-        document.documentElement.style.setProperty('--accent', about.brand.accent);
-      }
+      if (about.brand.accent) applyAccent(about.brand.accent);
       window._brand = about.brand;
     }
   } catch(e) {}

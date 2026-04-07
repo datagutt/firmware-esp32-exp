@@ -174,15 +174,16 @@ esp_err_t root_handler(httpd_req_t* req) {
 #endif
 
   ESP_LOGI(TAG, "Serving root page");
-  int len = snprintf(nullptr, 0, setup_html_start, brand_name, brand_name,
-                     url_hide, image_url, api_key, swap_section);
+  const char* accent = CONFIG_BRAND_ACCENT_COLOR;
+  int len = snprintf(nullptr, 0, setup_html_start, brand_name, accent,
+                     brand_name, url_hide, image_url, api_key, swap_section);
   auto* buf = static_cast<char*>(malloc(len + 1));
   if (!buf) {
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                "Out of memory");
   }
-  snprintf(buf, len + 1, setup_html_start, brand_name, brand_name, url_hide,
-           image_url, api_key, swap_section);
+  snprintf(buf, len + 1, setup_html_start, brand_name, accent, brand_name,
+           url_hide, image_url, api_key, swap_section);
   httpd_resp_set_type(req, "text/html");
   esp_err_t ret = httpd_resp_send(req, buf, len);
   free(buf);
@@ -380,11 +381,12 @@ esp_err_t save_handler(httpd_req_t* req) {
 
   // Render branded success page
   int success_len =
-      snprintf(nullptr, 0, success_html_start, CONFIG_BRAND_NAME);
+      snprintf(nullptr, 0, success_html_start, CONFIG_BRAND_NAME,
+               CONFIG_BRAND_ACCENT_COLOR);
   auto* success_buf = static_cast<char*>(malloc(success_len + 1));
   if (success_buf) {
     snprintf(success_buf, success_len + 1, success_html_start,
-             CONFIG_BRAND_NAME);
+             CONFIG_BRAND_NAME, CONFIG_BRAND_ACCENT_COLOR);
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, success_buf, success_len);
     free(success_buf);

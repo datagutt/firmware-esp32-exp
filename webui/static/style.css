@@ -13,6 +13,7 @@
   --accent-dim: #0891b2;
   --accent-glow: rgba(0, 212, 255, 0.12);
   --accent-glow-md: rgba(0, 212, 255, 0.25);
+  --accent-bg: rgba(0, 212, 255, 0.03);
   --success: #34d399;
   --success-glow: rgba(52, 211, 153, 0.15);
   --danger: #f87171;
@@ -39,7 +40,7 @@
 body {
   font-family: var(--font-sans);
   background: var(--bg);
-  background-image: radial-gradient(ellipse at 50% 0%, rgba(0, 212, 255, 0.03) 0%, transparent 60%);
+  background-image: radial-gradient(ellipse at 50% 0%, var(--accent-bg) 0%, transparent 60%);
   color: var(--text);
   line-height: 1.6;
   min-height: 100vh;

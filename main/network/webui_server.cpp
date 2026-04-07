@@ -56,13 +56,17 @@ esp_err_t serve_fallback_page(httpd_req_t* req) {
   const char* image_url = cfg.image_url[0] ? cfg.image_url : "";
   const char* api_key = cfg.api_key[0] ? cfg.api_key : "";
 
-  int len = snprintf(nullptr, 0, setup_html_start, image_url, api_key, "");
+  const char* brand = CONFIG_BRAND_NAME;
+  const char* accent = CONFIG_BRAND_ACCENT_COLOR;
+  int len = snprintf(nullptr, 0, setup_html_start, brand, accent, brand, "",
+                     image_url, api_key, "");
   auto* buf = static_cast<char*>(malloc(len + 1));
   if (!buf) {
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                "Out of memory");
   }
-  snprintf(buf, len + 1, setup_html_start, image_url, api_key, "");
+  snprintf(buf, len + 1, setup_html_start, brand, accent, brand, "",
+           image_url, api_key, "");
   httpd_resp_set_type(req, "text/html");
   esp_err_t ret = httpd_resp_send(req, buf, len);
   free(buf);
@@ -134,6 +138,35 @@ esp_err_t static_file_handler(httpd_req_t* req) {
 
   // Cache static assets for 1 hour
   httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=3600");
+
+  // For non-gzipped HTML files, inject brand accent color into data-accent=""
+  bool is_html = strstr(filepath, ".html") || strstr(filepath, ".htm");
+  if (is_html && !use_gzip && st.st_size < 16384) {
+    auto* content = static_cast<char*>(malloc(st.st_size + 1));
+    if (content) {
+      size_t bytes = fread(content, 1, st.st_size, f);
+      fclose(f);
+      content[bytes] = '\0';
+
+      static constexpr const char* kPlaceholder = "data-accent=\"\"";
+      const char* found = strstr(content, kPlaceholder);
+      if (found) {
+        char replacement[48];
+        snprintf(replacement, sizeof(replacement), "data-accent=\"%s\"",
+                 CONFIG_BRAND_ACCENT_COLOR);
+        httpd_resp_send_chunk(req, content, found - content);
+        httpd_resp_send_chunk(req, replacement, strlen(replacement));
+        const char* after = found + strlen(kPlaceholder);
+        httpd_resp_send_chunk(req, after, (content + bytes) - after);
+        httpd_resp_send_chunk(req, nullptr, 0);
+      } else {
+        httpd_resp_send(req, content, bytes);
+      }
+      free(content);
+      return ESP_OK;
+    }
+    // malloc failed — fall through to streaming
+  }
 
   // Stream file in chunks
   char buf[512];
