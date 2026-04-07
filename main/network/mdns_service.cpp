@@ -51,7 +51,8 @@ void start_mdns() {
       {"version", app->version},
   };
 
-  ret = mdns_service_add(nullptr, "_tronbyt", "_tcp", 80, txt, 2);
+  ret = mdns_service_add(nullptr, "_" CONFIG_BRAND_NAME_LOWER, "_tcp", 80, txt,
+                         2);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "mdns_service_add failed: %s", esp_err_to_name(ret));
     mdns_free();

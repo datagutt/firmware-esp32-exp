@@ -26,6 +26,7 @@ constexpr const char* NVS_KEY_API_KEY = "api_key";
 constexpr const char* NVS_KEY_SWAP_COLORS = "swap_colors";
 constexpr const char* NVS_KEY_WIFI_POWER_SAVE = "wifi_ps";
 constexpr const char* NVS_KEY_SKIP_VERSION = "skip_ver";
+constexpr const char* NVS_KEY_SKIP_BOOT = "skip_boot";
 constexpr const char* NVS_KEY_AP_MODE = "ap_mode";
 constexpr const char* NVS_KEY_PREFER_IPV6 = "prefer_ipv6";
 
@@ -101,6 +102,7 @@ esp_err_t persist_to_nvs() {
   nvs.set_u8(NVS_KEY_WIFI_POWER_SAVE,
              static_cast<uint8_t>(s_config.wifi_power_save));
   nvs.set_u8(NVS_KEY_SKIP_VERSION, s_config.skip_display_version ? 1 : 0);
+  nvs.set_u8(NVS_KEY_SKIP_BOOT, s_config.skip_boot_animation ? 1 : 0);
   nvs.set_u8(NVS_KEY_AP_MODE, s_config.ap_mode ? 1 : 0);
   nvs.set_u8(NVS_KEY_PREFER_IPV6, s_config.prefer_ipv6 ? 1 : 0);
   nvs.commit();
@@ -182,6 +184,10 @@ esp_err_t nvs_settings_init(void) {
   s_config.skip_display_version = true;
 #endif
 
+#ifdef CONFIG_SKIP_BOOT_ANIMATION
+  s_config.skip_boot_animation = true;
+#endif
+
 #ifdef CONFIG_ENABLE_AP_MODE
   s_config.ap_mode = true;
 #endif
@@ -240,6 +246,9 @@ esp_err_t nvs_settings_init(void) {
       if (nvs.get_u8(NVS_KEY_SKIP_VERSION, &val_u8) == ESP_OK)
         s_config.skip_display_version = (val_u8 != 0);
 
+      if (nvs.get_u8(NVS_KEY_SKIP_BOOT, &val_u8) == ESP_OK)
+        s_config.skip_boot_animation = (val_u8 != 0);
+
       if (nvs.get_u8(NVS_KEY_AP_MODE, &val_u8) == ESP_OK)
         s_config.ap_mode = (val_u8 != 0);
 
@@ -280,6 +289,23 @@ esp_err_t nvs_settings_init(void) {
       strlen(s_config.password) > 0) {
     persist_to_nvs();
   }
+
+  // Apply brand default server URL if NVS has none and secrets.json had none
+  if (strlen(s_config.image_url) == 0 &&
+      strlen(CONFIG_DEFAULT_SERVER_URL) > 0) {
+    snprintf(s_config.image_url, sizeof(s_config.image_url), "%s",
+             CONFIG_DEFAULT_SERVER_URL);
+    ESP_LOGI(TAG, "Applied brand default server URL");
+  }
+
+#ifdef CONFIG_LOCK_SERVER_URL
+  // When server URL is locked, always override with the Kconfig value
+  if (strlen(CONFIG_DEFAULT_SERVER_URL) > 0) {
+    snprintf(s_config.image_url, sizeof(s_config.image_url), "%s",
+             CONFIG_DEFAULT_SERVER_URL);
+    ESP_LOGI(TAG, "Server URL locked to brand default");
+  }
+#endif
 
   ESP_LOGI(TAG, "Settings initialized. SSID: %s, URL: %s, AP Mode: %d",
            s_config.ssid, s_config.image_url, s_config.ap_mode);

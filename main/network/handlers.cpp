@@ -195,6 +195,7 @@ void process_text_message(const char* json_str) {
                                       "brightness",      "ota_url",
                                       "swap_colors",     "wifi_power_save",
                                       "skip_display_version",
+                                      "skip_boot_animation",
                                       "ap_mode",         "prefer_ipv6",
                                       "hostname",        "syslog_addr",
                                       "sntp_server",     "image_url",
@@ -342,6 +343,14 @@ void process_text_message(const char* json_str) {
     settings_changed = true;
   }
 
+  cJSON* skip_boot_item = cJSON_GetObjectItem(root, "skip_boot_animation");
+  if (cJSON_IsBool(skip_boot_item)) {
+    bool val = cJSON_IsTrue(skip_boot_item);
+    cfg.skip_boot_animation = val;
+    ESP_LOGI(TAG, "Updated skip_boot_animation to %d", val);
+    settings_changed = true;
+  }
+
   cJSON* ap_mode_item = cJSON_GetObjectItem(root, "ap_mode");
   if (cJSON_IsBool(ap_mode_item)) {
     bool val = cJSON_IsTrue(ap_mode_item);
@@ -382,9 +391,13 @@ void process_text_message(const char* json_str) {
   }
 
   if (has_image_url) {
+#ifdef CONFIG_LOCK_SERVER_URL
+    ESP_LOGW(TAG, "image_url change ignored (server URL locked)");
+#else
     snprintf(cfg.image_url, sizeof(cfg.image_url), "%s", image_url_value);
     ESP_LOGI(TAG, "Updated image_url to %s", image_url_value);
     settings_changed = true;
+#endif
   }
 
   if (has_api_key) {

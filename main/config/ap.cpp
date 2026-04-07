@@ -14,6 +14,7 @@
 #include "http_server.h"
 #include "nvs_settings.h"
 #include "ota_http_upload.h"
+#include "sdkconfig.h"
 #include "webp_player.h"
 #include "wifi.h"
 
@@ -21,7 +22,7 @@ namespace {
 
 const char* TAG = "AP";
 
-constexpr const char* DEFAULT_AP_SSID = "TRON-CONFIG";
+constexpr const char* DEFAULT_AP_SSID = CONFIG_BRAND_NAME_LOWER "-CONFIG";
 
 constexpr int DNS_PORT = 53;
 constexpr int DNS_MAX_LEN = 512;
@@ -166,15 +167,23 @@ esp_err_t root_handler(httpd_req_t* req) {
   swap_section = swap_buf;
 #endif
 
+  const char* brand_name = CONFIG_BRAND_NAME;
+  const char* url_hide = "";
+#ifdef CONFIG_LOCK_SERVER_URL
+  url_hide = "style='display:none'";
+#endif
+
   ESP_LOGI(TAG, "Serving root page");
-  int len =
-      snprintf(nullptr, 0, setup_html_start, image_url, api_key, swap_section);
+  const char* accent = CONFIG_BRAND_ACCENT_COLOR;
+  int len = snprintf(nullptr, 0, setup_html_start, brand_name, accent,
+                     brand_name, url_hide, image_url, api_key, swap_section);
   auto* buf = static_cast<char*>(malloc(len + 1));
   if (!buf) {
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                "Out of memory");
   }
-  snprintf(buf, len + 1, setup_html_start, image_url, api_key, swap_section);
+  snprintf(buf, len + 1, setup_html_start, brand_name, accent, brand_name,
+           url_hide, image_url, api_key, swap_section);
   httpd_resp_set_type(req, "text/html");
   esp_err_t ret = httpd_resp_send(req, buf, len);
   free(buf);
@@ -351,11 +360,18 @@ esp_err_t save_handler(httpd_req_t* req) {
     auto cfg = config_get();
     snprintf(cfg.ssid, sizeof(cfg.ssid), "%s", ssid);
     snprintf(cfg.password, sizeof(cfg.password), "%s", password);
+#ifdef CONFIG_LOCK_SERVER_URL
+    // When server URL is locked, always use the Kconfig default
+    snprintf(cfg.image_url, sizeof(cfg.image_url), "%s",
+             CONFIG_DEFAULT_SERVER_URL);
+    ESP_LOGI(TAG, "Server URL locked to: %s", CONFIG_DEFAULT_SERVER_URL);
+#else
     if (strlen(image_url) >= 6) {
       snprintf(cfg.image_url, sizeof(cfg.image_url), "%s", image_url);
     } else {
       cfg.image_url[0] = '\0';
     }
+#endif
     snprintf(cfg.api_key, sizeof(cfg.api_key), "%s", api_key);
     cfg.swap_colors = swap_colors;
     config_set(&cfg);
@@ -363,8 +379,21 @@ esp_err_t save_handler(httpd_req_t* req) {
 
   free(buf);
 
-  httpd_resp_set_type(req, "text/html");
-  httpd_resp_send(req, success_html_start, HTTPD_RESP_USE_STRLEN);
+  // Render branded success page
+  int success_len =
+      snprintf(nullptr, 0, success_html_start, CONFIG_BRAND_NAME,
+               CONFIG_BRAND_ACCENT_COLOR);
+  auto* success_buf = static_cast<char*>(malloc(success_len + 1));
+  if (success_buf) {
+    snprintf(success_buf, success_len + 1, success_html_start,
+             CONFIG_BRAND_NAME, CONFIG_BRAND_ACCENT_COLOR);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, success_buf, success_len);
+    free(success_buf);
+  } else {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, success_html_start, HTTPD_RESP_USE_STRLEN);
+  }
 
   ESP_LOGI(TAG, "Configuration saved - rebooting...");
   gfx_safe_restart();

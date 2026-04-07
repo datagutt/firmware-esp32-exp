@@ -30,6 +30,7 @@ typedef struct {
   bool swap_colors;
   wifi_ps_type_t wifi_power_save;
   bool skip_display_version;
+  bool skip_boot_animation;
   bool ap_mode;
   bool prefer_ipv6;
 } system_config_t;

@@ -30,6 +30,8 @@ extern void touch_on_brightness_set(uint8_t brightness);
 #include "webp_player.h"
 #include "wifi.h"
 
+#include "sdkconfig.h"
+
 namespace {
 
 const char* TAG = "sta_api";
@@ -274,8 +276,20 @@ esp_err_t about_handler(httpd_req_t* req) {
   }
 
   cJSON_AddStringToObject(root, "model", mdns_board_model());
-  cJSON_AddStringToObject(root, "type", "tronbyt");
+  cJSON_AddStringToObject(root, "type", CONFIG_BRAND_NAME_LOWER);
   cJSON_AddStringToObject(root, "version", app->version);
+
+  cJSON* brand = cJSON_CreateObject();
+  if (brand) {
+    cJSON_AddStringToObject(brand, "name", CONFIG_BRAND_NAME);
+    cJSON_AddStringToObject(brand, "accent", CONFIG_BRAND_ACCENT_COLOR);
+#ifdef CONFIG_LOCK_SERVER_URL
+    cJSON_AddBoolToObject(brand, "server_locked", true);
+#else
+    cJSON_AddBoolToObject(brand, "server_locked", false);
+#endif
+    cJSON_AddItemToObject(root, "brand", brand);
+  }
 
   char* json = cJSON_PrintUnformatted(root);
   cJSON_Delete(root);

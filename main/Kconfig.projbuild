@@ -42,6 +42,12 @@ menu "Application Configuration"
         help
             Skip displaying the firmware version on boot.
 
+    config SKIP_BOOT_ANIMATION
+        bool "Skip Boot Animation"
+        default n
+        help
+            Skip the boot animation on startup.
+
     config PREFER_IPV6
         bool "Prefer IPv6"
         default n
@@ -73,6 +79,43 @@ menu "Application Configuration"
         config BOOT_WEBP_PARROT
             bool "Parrot"
     endchoice
+
+    menu "Brand Configuration"
+
+        config BRAND_NAME
+            string "Brand Name"
+            default "Tronbyt"
+            help
+                Display name shown in WebUI header, captive portal, and page titles.
+
+        config BRAND_NAME_LOWER
+            string "Brand Name (lowercase)"
+            default "tronbyt"
+            help
+                Lowercase name used for hostname prefix, mDNS service, and API type field.
+
+        config BRAND_ACCENT_COLOR
+            string "Accent Color (hex)"
+            default "#00d4ff"
+            help
+                CSS hex color for WebUI accent. Used for header, buttons, indicators.
+
+        config DEFAULT_SERVER_URL
+            string "Default Server URL"
+            default ""
+            help
+                Pre-configured server URL baked into branded firmware.
+                If empty, the build-time REMOTE_URL from secrets.json is used.
+
+        config LOCK_SERVER_URL
+            bool "Lock Server URL"
+            default n
+            help
+                When enabled, hides the server URL field from the setup page and
+                WebUI settings. An "Advanced Settings" toggle in the WebUI still
+                allows changing it for power users.
+
+    endmenu
 
     choice BOARD_TYPE
         prompt "Board Type"
