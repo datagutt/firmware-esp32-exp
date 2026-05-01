@@ -4,6 +4,17 @@
 //
 // WS mode:  passive — reacts to content pushed by the server.
 // HTTP mode: active — prefetches next image before dwell expires.
+//
+// Concurrency model:
+//   - `ctx.mutex` serializes every read/write to `ctx`.
+//   - All public entry points (scheduler_on_*, scheduler_start_*,
+//     scheduler_stop), the two esp_timer callbacks, and player_event_handler
+//     take the lock at the boundary.
+//   - Internal helpers (transition_to, http_trigger_fetch,
+//     http_apply_prefetch, etc.) do NOT take the lock; they run with the
+//     caller's lock held.
+//   - http_fetch_task does the network request without the lock, then
+//     briefly takes the lock to publish results into ctx.prefetch.
 
 #include "scheduler.h"
 
@@ -22,6 +33,7 @@
 
 #include "display.h"
 #include "ota.h"
+#include "raii_utils.hpp"
 #include "remote.h"
 #include "scheduler_fsm.h"
 #include "sdkconfig.h"
@@ -123,11 +135,14 @@ struct Context {
 
   // Default brightness
   uint8_t brightness_pct = (CONFIG_HUB75_BRIGHTNESS * 100) / 255;
+
+  // Synchronization
+  SemaphoreHandle_t mutex = nullptr;
 };
 
 Context ctx;
 
-// Forward declarations
+// Forward declarations (all called with ctx.mutex held)
 void transition_to(State new_state);
 void http_trigger_fetch();
 void http_apply_prefetch();
@@ -193,21 +208,57 @@ void ota_task_entry(void* param) {
 void http_fetch_task(void* param) {
   (void)param;
 
-  ctx.prefetch.clear();
+  // Phase 1 — read inputs we need under the lock.
+  char* http_url_copy = nullptr;
+  uint8_t brightness_pct = 0;
+  {
+    raii::MutexGuard lock(ctx.mutex);
+    if (lock) {
+      brightness_pct = ctx.brightness_pct;
+      if (ctx.http_url) http_url_copy = strdup(ctx.http_url);
+    }
+  }
 
+  if (!http_url_copy) {
+    ESP_LOGW(TAG, "Fetch aborted: no URL (scheduler stopped?)");
+    raii::MutexGuard lock(ctx.mutex);
+    if (lock) ctx.fetch_task = nullptr;
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  // Phase 2 — perform the network request without holding the lock.
   uint8_t* webp = nullptr;
   size_t len = 0;
-  uint8_t brightness_pct = ctx.brightness_pct;
   int32_t dwell_secs = 0;
   int status_code = 0;
   char* ota_url = nullptr;
 
-  ESP_LOGI(TAG, "HTTP fetch: %s", ctx.http_url);
-
+  ESP_LOGI(TAG, "HTTP fetch: %s", http_url_copy);
   bool ok = wifi_is_connected() &&
-            !remote_get(ctx.http_url, &webp, &len, &brightness_pct,
+            !remote_get(http_url_copy, &webp, &len, &brightness_pct,
                         &dwell_secs, &status_code, &ota_url);
+  free(http_url_copy);
 
+  // Phase 3 — publish result and decide what to do, under the lock.
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) {
+    if (webp) free(webp);
+    if (ota_url) free(ota_url);
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  // If scheduler was stopped while we were fetching, discard the result.
+  if (ctx.mode != Mode::HTTP) {
+    if (webp) free(webp);
+    if (ota_url) free(ota_url);
+    ctx.fetch_task = nullptr;
+    vTaskDelete(nullptr);
+    return;
+  }
+
+  ctx.prefetch.clear();
   ctx.prefetch.webp = webp;
   ctx.prefetch.len = len;
   ctx.prefetch.brightness_pct = brightness_pct;
@@ -217,7 +268,6 @@ void http_fetch_task(void* param) {
   ctx.prefetch.failed = !ok;
   ctx.prefetch.ready.store(true);
 
-  // If player is idle (dwell expired while we were fetching), apply now
   if (ctx.state == State::HTTP_FETCHING ||
       ctx.state == State::HTTP_PREFETCHING) {
     http_apply_prefetch();
@@ -244,6 +294,10 @@ void http_trigger_fetch() {
 
 void http_apply_prefetch() {
   if (!ctx.prefetch.ready.load()) return;
+  if (ctx.mode != Mode::HTTP) {
+    ctx.prefetch.clear();
+    return;
+  }
 
   // Handle OTA
   if (ctx.prefetch.ota_url) {
@@ -313,6 +367,9 @@ void http_apply_prefetch() {
 // ---------------------------------------------------------------------------
 
 void prefetch_timer_callback(void*) {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   ESP_LOGD(TAG, "Prefetch timer fired");
 
   if (ctx.mode == Mode::HTTP && ctx.state == State::PLAYING) {
@@ -324,6 +381,9 @@ void prefetch_timer_callback(void*) {
 }
 
 void retry_timer_callback(void*) {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   ESP_LOGI(TAG, "Retry timer fired");
 
   if (ctx.mode == Mode::HTTP) {
@@ -336,7 +396,7 @@ void retry_timer_callback(void*) {
 }
 
 // ---------------------------------------------------------------------------
-// GFX Player event handler
+// GFX Player event handler (called with lock held)
 // ---------------------------------------------------------------------------
 
 void on_player_playing(const gfx_playing_evt_t* evt) {
@@ -415,6 +475,9 @@ void on_player_error(const gfx_error_evt_t* evt) {
 
 void player_event_handler(void*, esp_event_base_t, int32_t event_id,
                           void* event_data) {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   switch (event_id) {
     case GFX_PLAYER_EVT_PLAYING:
       on_player_playing(
@@ -437,6 +500,12 @@ void player_event_handler(void*, esp_event_base_t, int32_t event_id,
 // ---------------------------------------------------------------------------
 
 void scheduler_init() {
+  ctx.mutex = xSemaphoreCreateMutex();
+  if (!ctx.mutex) {
+    ESP_LOGE(TAG, "Failed to create scheduler mutex");
+    return;
+  }
+
   // Create prefetch timer (HTTP mode)
   esp_timer_create_args_t prefetch_args = {};
   prefetch_args.callback = prefetch_timer_callback;
@@ -459,13 +528,20 @@ void scheduler_init() {
 }
 
 void scheduler_start_ws() {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   ctx.mode = Mode::WEBSOCKET;
   transition_to(State::IDLE);
   ESP_LOGI(TAG, "Started in WebSocket mode");
 }
 
 void scheduler_start_http(const char* url) {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   ctx.mode = Mode::HTTP;
+  if (ctx.http_url) free(ctx.http_url);
   ctx.http_url = strdup(url);
 
   // Trigger initial fetch
@@ -476,6 +552,9 @@ void scheduler_start_http(const char* url) {
 }
 
 void scheduler_stop() {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   stop_timers();
 
   ctx.prefetch.clear();
@@ -491,6 +570,9 @@ void scheduler_stop() {
 }
 
 void scheduler_on_ws_connect() {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   ctx.ws_connected = true;
   gfx_interrupt();
   transition_to(State::IDLE);
@@ -498,6 +580,9 @@ void scheduler_on_ws_connect() {
 }
 
 void scheduler_on_ws_disconnect() {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+
   ctx.ws_connected = false;
   stop_timers();
   gfx_play_embedded("no_connect", true);
