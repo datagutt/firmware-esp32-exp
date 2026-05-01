@@ -19,23 +19,6 @@ constexpr uint32_t TBUP_MAGIC = 0x50554254;  // "TBUP" little-endian
 constexpr size_t TBUP_HEADER_SIZE = 16;
 constexpr size_t FLASH_SECTOR_SIZE = 4096;
 
-// Receive exactly `len` bytes from the HTTP stream into `dst`.
-// Returns ESP_OK on success, ESP_FAIL on connection error.
-esp_err_t recv_exact(httpd_req_t* req, char* dst, size_t len) {
-  size_t got = 0;
-  while (got < len) {
-    int r = httpd_req_recv(req, dst + got, len - got);
-    if (r > 0) {
-      got += r;
-    } else if (r == HTTPD_SOCK_ERR_TIMEOUT) {
-      continue;
-    } else {
-      return ESP_FAIL;
-    }
-  }
-  return ESP_OK;
-}
-
 // Stream `total` bytes from the HTTP request into an OTA handle, using `buf`
 // of size `buf_size`. `already` bytes at the start of `buf` have already been
 // received and should be written first.
