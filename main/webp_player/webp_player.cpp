@@ -297,6 +297,19 @@ bool check_dwell_expired() {
 // Decode Error Handling
 //------------------------------------------------------------------------------
 
+void give_up_decode() {
+  emit_error_event();
+  free_buffer();
+  // Show oversize asset for RAM-sourced images (not embedded, to avoid loops)
+  if (ctx.source_type == GFX_SOURCE_RAM) {
+    goto_idle();
+    gfx_play_embedded("oversize", false);
+  } else {
+    draw_error_indicator_pixel();
+    goto_idle();
+  }
+}
+
 void handle_decode_error() {
   ctx.decode_error_count++;
   ESP_LOGW(TAG, "Decode error %d/%d", ctx.decode_error_count,
@@ -304,29 +317,19 @@ void handle_decode_error() {
 
   if (ctx.decode_error_count >= DECODE_RETRY_COUNT) {
     ESP_LOGE(TAG, "Max retries reached");
-    emit_error_event();
-    free_buffer();
-    // Show oversize asset for RAM-sourced images (not embedded, to avoid loops)
-    if (ctx.source_type == GFX_SOURCE_RAM) {
-      goto_idle();
-      gfx_play_embedded("oversize", false);
-    } else {
-      draw_error_indicator_pixel();
-      goto_idle();
-    }
+    give_up_decode();
     return;
   }
 
-  // Retry: recreate decoder after delay. If recreation fails, give up
-  // cleanly instead of recursing into handle_decode_error (which can blow
-  // the stack if create_decoder keeps failing).
+  // Retry: recreate decoder after delay. The actual retry happens in the
+  // player loop on the next iteration, which calls decode_and_render_frame
+  // against the freshly recreated decoder. If recreation itself fails, give
+  // up immediately rather than recursing into handle_decode_error (which
+  // would blow the stack if create_decoder keeps failing).
   vTaskDelay(pdMS_TO_TICKS(DECODE_RETRY_DELAY_MS));
   if (!create_decoder()) {
     ESP_LOGE(TAG, "Decoder recreation failed, giving up");
-    emit_error_event();
-    free_buffer();
-    draw_error_indicator_pixel();
-    goto_idle();
+    give_up_decode();
   }
 }
 
