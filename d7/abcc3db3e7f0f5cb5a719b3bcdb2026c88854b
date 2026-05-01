@@ -1,0 +1,31 @@
+main/webp_player/webp_player.cpp
+  1142cf68be5f94bf 26,222,224,236,238
+main/network/sockets.cpp
+  1142cf68be5f94bf 1-175,186-188,192-215,219-430
+main/network/messages.cpp
+  1142cf68be5f94bf 11,80-81,95-103,108
+main/network/messages.h
+  1142cf68be5f94bf 1-7
+main/network/sockets.h
+  1142cf68be5f94bf 1-21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "d7abcc3db3e7f0f5cb5a719b3bcdb2026c88854b",
+  "prompts": {
+    "1142cf68be5f94bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bdfd4405-8d09-4a53-b5a1-ed311ce4e9b1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Thomas Lekanger",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 23,
+      "accepted_lines": 1022,
+      "overriden_lines": 0
+    }
+  }
+}
