@@ -328,11 +328,16 @@ void handle_decode_error() {
     return;
   }
 
-  // Retry: recreate decoder after delay
+  // Retry: recreate decoder after delay. If recreation fails, give up
+  // cleanly instead of recursing into handle_decode_error (which can blow
+  // the stack if create_decoder keeps failing).
   vTaskDelay(pdMS_TO_TICKS(DECODE_RETRY_DELAY_MS));
   if (!create_decoder()) {
-    ctx.decode_error_count = DECODE_RETRY_COUNT;
-    handle_decode_error();
+    ESP_LOGE(TAG, "Decoder recreation failed, giving up");
+    emit_error_event();
+    free_buffer();
+    draw_error_indicator_pixel();
+    goto_idle();
   }
 }
 
