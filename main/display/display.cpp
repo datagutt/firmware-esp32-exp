@@ -319,6 +319,14 @@ bool display_wait_frame(uint32_t timeout_ms) {
 }
 
 void display_draw_buffer(const uint8_t *pix, int width, int height) {
+  if (!pix || width <= 0 || height <= 0) return;
+  if (width > CONFIG_HUB75_PANEL_WIDTH ||
+      height > CONFIG_HUB75_PANEL_HEIGHT) {
+    ESP_LOGW(TAG, "Rejecting oversized frame: %dx%d (panel %dx%d)", width,
+             height, CONFIG_HUB75_PANEL_WIDTH, CONFIG_HUB75_PANEL_HEIGHT);
+    return;
+  }
+
 #if CONFIG_HUB75_PANEL_WIDTH == 128 && CONFIG_HUB75_PANEL_HEIGHT == 64
   if (width == 64 && height == 32) {
     // Batched 2x upscale: process kUpscaleBatchSrcRows source rows at a
@@ -353,6 +361,13 @@ void display_draw_buffer(const uint8_t *pix, int width, int height) {
 }
 
 void display_draw(const uint8_t *pix, int width, int height) {
+  if (!pix || width <= 0 || height <= 0) return;
+  if (width > CONFIG_HUB75_PANEL_WIDTH ||
+      height > CONFIG_HUB75_PANEL_HEIGHT) {
+    ESP_LOGW(TAG, "Rejecting oversized frame: %dx%d (panel %dx%d)", width,
+             height, CONFIG_HUB75_PANEL_WIDTH, CONFIG_HUB75_PANEL_HEIGHT);
+    return;
+  }
   display_draw_buffer(pix, width, height);
   _matrix->flip_buffer();
 }
