@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 
 #include "nvs_settings.h"
+#include "sockets.h"
 #include "version.h"
 #include "wifi.h"
 
@@ -17,7 +18,6 @@ const char* TAG = "messages";
 
 constexpr int WEBSOCKET_PROTOCOL_VERSION = 1;
 
-esp_websocket_client_handle_t s_client = nullptr;
 TaskHandle_t s_client_info_task = nullptr;
 
 void client_info_task(void*) {
@@ -30,8 +30,6 @@ void client_info_task(void*) {
 }  // namespace
 
 esp_err_t msg_send_client_info_now() {
-  if (!s_client) return ESP_ERR_INVALID_STATE;
-
   esp_err_t ret = ESP_OK;
   uint8_t mac[6];
   auto cfg = config_get();
@@ -79,9 +77,8 @@ esp_err_t msg_send_client_info_now() {
   char* json_str = cJSON_PrintUnformatted(root);
   if (json_str) {
     ESP_LOGI(TAG, "Sending client info: %s", json_str);
-    int sent = esp_websocket_client_send_text(s_client, json_str,
-                                              strlen(json_str),
-                                              pdMS_TO_TICKS(5000));
+    int sent = sockets_send_text(json_str, strlen(json_str),
+                                 pdMS_TO_TICKS(5000));
     if (sent < 0) {
       ESP_LOGE(TAG, "Failed to send client info: %d", sent);
       ret = ESP_FAIL;
@@ -95,21 +92,20 @@ esp_err_t msg_send_client_info_now() {
   return ret;
 }
 
-void msg_init(esp_websocket_client_handle_t client) {
-  s_client = client;
-  if (!s_client_info_task) {
-    BaseType_t rc =
-        xTaskCreate(client_info_task, "client_info", 4096, nullptr, 4,
-                    &s_client_info_task);
-    if (rc != pdPASS) {
-      s_client_info_task = nullptr;
-      ESP_LOGE(TAG, "Failed to create client info task");
-    }
+void msg_init() {
+  if (s_client_info_task) return;
+
+  BaseType_t rc =
+      xTaskCreate(client_info_task, "client_info", 4096, nullptr, 4,
+                  &s_client_info_task);
+  if (rc != pdPASS) {
+    s_client_info_task = nullptr;
+    ESP_LOGE(TAG, "Failed to create client info task");
   }
 }
 
 esp_err_t msg_send_client_info() {
-  if (!s_client || !s_client_info_task) return ESP_ERR_INVALID_STATE;
+  if (!s_client_info_task) return ESP_ERR_INVALID_STATE;
   xTaskNotifyGive(s_client_info_task);
   return ESP_OK;
 }

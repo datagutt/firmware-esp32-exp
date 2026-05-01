@@ -1,5 +1,15 @@
 // Sockets — Event-driven WebSocket client with FSM and timer-based reconnect.
 // Modeled on matrx-fw's sockets module, adapted for our JSON protocol.
+//
+// Concurrency model:
+//   - The esp_timer task owns the client handle: only `reconnect_timer_callback`
+//     destroys or creates the client.
+//   - Other tasks (WS event handler, event_bus, callers) take `client_mutex`
+//     when they need to read or send. Senders never destroy.
+//   - To avoid holding the mutex during the blocking
+//     `esp_websocket_client_destroy` (which waits for the WS task to exit),
+//     the timer swaps `ctx.client` to nullptr under the lock, then performs
+//     the destroy outside the lock.
 
 #include "sockets.h"
 #include "handlers.h"
@@ -14,11 +24,13 @@
 #include <esp_wifi.h>
 #include <esp_websocket_client.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "app_state.h"
 #include "display.h"
 #include "event_bus.h"
 #include "nvs_settings.h"
+#include "raii_utils.hpp"
 #include "scheduler.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -57,6 +69,7 @@ struct SocketContext {
 };
 
 SocketContext ctx;
+SemaphoreHandle_t client_mutex = nullptr;
 
 int sock_failure_count = 0;
 int wifi_disconnect_count = 0;
@@ -65,27 +78,43 @@ int wifi_disconnect_count = 0;
 esp_timer_handle_t reconnect_timer = nullptr;
 
 // Forward declarations
-esp_err_t start_client();
+esp_err_t start_client_locked();
 void schedule_reconnect();
 
 // ---------------------------------------------------------------------------
 // Reconnection (timer-based, no blocking loop)
 // ---------------------------------------------------------------------------
 
+// The esp_timer task is the sole owner of destroy/create. WS-task event
+// handlers and other observers must NEVER call esp_websocket_client_destroy:
+// per ESP-IDF docs that risks deadlock (destroy waits for the WS task to
+// exit). They schedule a reconnect instead.
 void reconnect_timer_callback(void*) {
   ESP_LOGI(TAG, "Reconnect timer fired");
 
-  if (ctx.client) {
-    esp_websocket_client_stop(ctx.client);
-    esp_websocket_client_destroy(ctx.client);
-    ctx.client = nullptr;
+  // Swap the handle out under the lock, then destroy without the lock so
+  // pending senders block briefly (waiting for the swap) rather than for
+  // the full destroy duration.
+  esp_websocket_client_handle_t to_destroy = nullptr;
+  {
+    raii::MutexGuard lock(client_mutex);
+    if (lock) {
+      to_destroy = ctx.client;
+      ctx.client = nullptr;
+    }
+  }
+  if (to_destroy) {
+    esp_websocket_client_stop(to_destroy);
+    esp_websocket_client_destroy(to_destroy);
   }
 
   if (ctx.state == State::Ready || ctx.state == State::Disconnected) {
-    // Check if network is still up
     if (wifi_is_connected()) {
-      ctx.state = State::Ready;
-      start_client();
+      raii::MutexGuard lock(client_mutex);
+      if (lock) {
+        ctx.state = State::Ready;
+        start_client_locked();
+      }
     } else {
       ctx.state = State::Disconnected;
       ESP_LOGW(TAG, "Network not available, will retry when IP acquired");
@@ -100,6 +129,39 @@ void schedule_reconnect() {
     ESP_LOGI(TAG, "Scheduled reconnect in %lld ms",
              RECONNECT_DELAY_US / 1000);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Failure escalation (called from ws_event_handler on WS task)
+// ---------------------------------------------------------------------------
+
+// On WS-task context: bump failure counters. Never destroys the client
+// directly — that's the timer's job. Returns true if a hard wifi reset was
+// requested (caller may then call esp_wifi_disconnect, which is safe from
+// any task).
+bool escalate_socket_failure() {
+  sock_failure_count++;
+  ESP_LOGW(TAG, "Socket failure %d/%d (wifi resets: %d/%d)",
+           sock_failure_count, MAX_SOCK_FAILURES_BEFORE_WIFI_RESET,
+           wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
+
+  if (sock_failure_count < MAX_SOCK_FAILURES_BEFORE_WIFI_RESET) {
+    schedule_reconnect();
+    return false;
+  }
+
+  wifi_disconnect_count++;
+  sock_failure_count = 0;
+
+  if (wifi_disconnect_count >= MAX_WIFI_RESETS_BEFORE_RESTART) {
+    ESP_LOGE(TAG, "Too many WiFi resets (%d), restarting",
+             wifi_disconnect_count);
+    esp_restart();
+  }
+
+  ESP_LOGW(TAG, "Too many socket failures, disconnecting WiFi (%d/%d)",
+           wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,31 +199,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
         }
         scheduler_on_ws_disconnect();
 
-        sock_failure_count++;
-        ESP_LOGW(TAG, "Socket failure %d/%d (wifi resets: %d/%d)",
-                 sock_failure_count, MAX_SOCK_FAILURES_BEFORE_WIFI_RESET,
-                 wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
-
-        if (sock_failure_count >= MAX_SOCK_FAILURES_BEFORE_WIFI_RESET) {
-          wifi_disconnect_count++;
-          sock_failure_count = 0;
-
-          if (wifi_disconnect_count >= MAX_WIFI_RESETS_BEFORE_RESTART) {
-            ESP_LOGE(TAG, "Too many WiFi resets (%d), restarting",
-                     wifi_disconnect_count);
-            esp_restart();
-          }
-
-          ESP_LOGW(TAG, "Too many socket failures, disconnecting WiFi (%d/%d)",
-                   wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
-          if (ctx.client) {
-            esp_websocket_client_stop(ctx.client);
-            esp_websocket_client_destroy(ctx.client);
-            ctx.client = nullptr;
-          }
-          esp_wifi_disconnect();
-        } else {
-          schedule_reconnect();
+        if (escalate_socket_failure()) {
+          esp_wifi_disconnect();  // safe from event handlers
         }
       }
       break;
@@ -183,31 +222,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
         ctx.state = wifi_up ? State::Ready : State::Disconnected;
         scheduler_on_ws_disconnect();
 
-        sock_failure_count++;
-        ESP_LOGW(TAG, "Socket failure %d/%d (wifi resets: %d/%d)",
-                 sock_failure_count, MAX_SOCK_FAILURES_BEFORE_WIFI_RESET,
-                 wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
-
-        if (sock_failure_count >= MAX_SOCK_FAILURES_BEFORE_WIFI_RESET) {
-          wifi_disconnect_count++;
-          sock_failure_count = 0;
-
-          if (wifi_disconnect_count >= MAX_WIFI_RESETS_BEFORE_RESTART) {
-            ESP_LOGE(TAG, "Too many WiFi resets (%d), restarting",
-                     wifi_disconnect_count);
-            esp_restart();
-          }
-
-          ESP_LOGW(TAG, "Too many socket failures, disconnecting WiFi (%d/%d)",
-                   wifi_disconnect_count, MAX_WIFI_RESETS_BEFORE_RESTART);
-          if (ctx.client) {
-            esp_websocket_client_stop(ctx.client);
-            esp_websocket_client_destroy(ctx.client);
-            ctx.client = nullptr;
-          }
+        if (escalate_socket_failure()) {
           esp_wifi_disconnect();
-        } else {
-          schedule_reconnect();
         }
       }
       break;
@@ -218,11 +234,15 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
 // Client lifecycle
 // ---------------------------------------------------------------------------
 
-esp_err_t start_client() {
+// Caller must hold client_mutex. Assumes ctx.client is null (the timer
+// nulls it before calling).
+esp_err_t start_client_locked() {
   if (ctx.client) {
-    ESP_LOGW(TAG, "Client already exists, destroying first");
-    esp_websocket_client_destroy(ctx.client);
-    ctx.client = nullptr;
+    // Should not happen with the new ownership model. Log and bail rather
+    // than calling destroy here (we are on the timer task and destroying
+    // is fine, but a non-null client at this point indicates a bug).
+    ESP_LOGE(TAG, "start_client_locked called with non-null client");
+    return ESP_ERR_INVALID_STATE;
   }
 
   if (!ctx.url) {
@@ -271,9 +291,6 @@ esp_err_t start_client() {
   esp_websocket_register_events(ctx.client, WEBSOCKET_EVENT_ANY,
                                 ws_event_handler, nullptr);
 
-  gfx_set_websocket_handle(ctx.client);
-  msg_init(ctx.client);
-
   esp_err_t err = esp_websocket_client_start(ctx.client);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to start WS client: %s", esp_err_to_name(err));
@@ -305,8 +322,6 @@ void on_wifi_event(const tronbyt_event_t* event, void*) {
       if (reconnect_timer) {
         esp_timer_stop(reconnect_timer);
         esp_timer_start_once(reconnect_timer, GOT_IP_CONNECT_DELAY_US);
-      } else {
-        start_client();
       }
     }
   }
@@ -319,8 +334,16 @@ void on_wifi_event(const tronbyt_event_t* event, void*) {
 // ---------------------------------------------------------------------------
 
 void sockets_init(const char* url) {
+  client_mutex = xSemaphoreCreateMutex();
+  if (!client_mutex) {
+    ESP_LOGE(TAG, "Failed to create client mutex");
+    return;
+  }
+
   handlers_init();
   ctx.url = strdup(url);
+
+  msg_init();
 
   // Create reconnect timer
   esp_timer_create_args_t reconnect_args = {};
@@ -357,11 +380,18 @@ void sockets_deinit() {
   // Unsubscribe from event bus
   event_bus_unsubscribe(on_wifi_event);
 
-  // Destroy client
-  if (ctx.client) {
-    esp_websocket_client_stop(ctx.client);
-    esp_websocket_client_destroy(ctx.client);
-    ctx.client = nullptr;
+  // Destroy client (swap then destroy without holding the lock)
+  esp_websocket_client_handle_t to_destroy = nullptr;
+  {
+    raii::MutexGuard lock(client_mutex);
+    if (lock) {
+      to_destroy = ctx.client;
+      ctx.client = nullptr;
+    }
+  }
+  if (to_destroy) {
+    esp_websocket_client_stop(to_destroy);
+    esp_websocket_client_destroy(to_destroy);
   }
 
   // Free URL and auth header
@@ -377,12 +407,24 @@ void sockets_deinit() {
   ctx.state = State::Disconnected;
 
   handlers_deinit();
+
+  if (client_mutex) {
+    vSemaphoreDelete(client_mutex);
+    client_mutex = nullptr;
+  }
 }
 
 bool sockets_is_connected() {
-  return ctx.client && esp_websocket_client_is_connected(ctx.client);
+  raii::MutexGuard lock(client_mutex);
+  if (!lock || !ctx.client) return false;
+  return esp_websocket_client_is_connected(ctx.client);
 }
 
-esp_websocket_client_handle_t sockets_get_client() {
-  return ctx.client;
+int sockets_send_text(const char* data, size_t len, TickType_t timeout) {
+  raii::MutexGuard lock(client_mutex, timeout);
+  if (!lock || !ctx.client) return -1;
+  if (!esp_websocket_client_is_connected(ctx.client)) return -1;
+  // The send is bounded by `timeout`; the reconnect timer will block on
+  // the mutex for this long before swapping the handle. Acceptable.
+  return esp_websocket_client_send_text(ctx.client, data, len, timeout);
 }

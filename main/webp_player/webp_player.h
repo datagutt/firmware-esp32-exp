@@ -1,7 +1,6 @@
 #pragma once
 
 #include <esp_event.h>
-#include <esp_websocket_client.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -56,7 +55,6 @@ typedef struct {
 //------------------------------------------------------------------------------
 
 int gfx_initialize(const char* img_url);
-void gfx_set_websocket_handle(esp_websocket_client_handle_t ws_handle);
 void gfx_shutdown(void);
 
 //------------------------------------------------------------------------------

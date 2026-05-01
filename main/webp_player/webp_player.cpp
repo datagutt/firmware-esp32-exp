@@ -12,7 +12,6 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
-#include <esp_websocket_client.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/semphr.h>
@@ -24,6 +23,7 @@
 #include "display.h"
 #include "nvs_settings.h"
 #include "raii_utils.hpp"
+#include "sockets.h"
 #include "version.h"
 
 static const char* TAG = "webp_player";
@@ -73,7 +73,6 @@ struct PlayerContext {
   TaskHandle_t task = nullptr;
   SemaphoreHandle_t mutex = nullptr;
   EventGroupHandle_t event_group = nullptr;
-  esp_websocket_client_handle_t ws_handle = nullptr;
 
   std::atomic<State> state{State::IDLE};
   std::atomic<bool> paused{false};
@@ -216,18 +215,13 @@ void emit_stopped_event() {
 constexpr TickType_t WS_SEND_TIMEOUT = pdMS_TO_TICKS(2000);
 
 void send_displaying_notification(int counter) {
-  if (!ctx.ws_handle ||
-      !esp_websocket_client_is_connected(ctx.ws_handle)) {
-    return;
-  }
   char message[64];
   int len =
       snprintf(message, sizeof(message), "{\"displaying\":%d}", counter);
   if (len > 0 && static_cast<size_t>(len) < sizeof(message)) {
-    int sent = esp_websocket_client_send_text(ctx.ws_handle, message, len,
-                                              WS_SEND_TIMEOUT);
+    int sent = sockets_send_text(message, len, WS_SEND_TIMEOUT);
     if (sent < 0) {
-      ESP_LOGW(TAG, "WS send timed out (displaying:%d)", counter);
+      ESP_LOGD(TAG, "WS send skipped (displaying:%d)", counter);
     } else {
       ESP_LOGD(TAG, "WS send: %s", message);
     }
@@ -235,18 +229,13 @@ void send_displaying_notification(int counter) {
 }
 
 void send_queued_notification(int counter) {
-  if (!ctx.ws_handle ||
-      !esp_websocket_client_is_connected(ctx.ws_handle)) {
-    return;
-  }
   char message[64];
   int len =
       snprintf(message, sizeof(message), "{\"queued\":%d}", counter);
   if (len > 0 && static_cast<size_t>(len) < sizeof(message)) {
-    int sent = esp_websocket_client_send_text(ctx.ws_handle, message, len,
-                                              WS_SEND_TIMEOUT);
+    int sent = sockets_send_text(message, len, WS_SEND_TIMEOUT);
     if (sent < 0) {
-      ESP_LOGW(TAG, "WS send timed out (queued:%d)", counter);
+      ESP_LOGD(TAG, "WS send skipped (queued:%d)", counter);
     } else {
       ESP_LOGD(TAG, "WS Send: %s", message);
     }
@@ -740,11 +729,6 @@ int gfx_initialize(const char* img_url) {
   ESP_LOGI(TAG, "WebP player initialized (task core=%d, stack=%u)", TASK_CORE,
            TASK_STACK_SIZE);
   return 0;
-}
-
-void gfx_set_websocket_handle(esp_websocket_client_handle_t ws_handle) {
-  ctx.ws_handle = ws_handle;
-  ESP_LOGI(TAG, "Websocket handle set");
 }
 
 int gfx_update(void* webp, size_t len, int32_t dwell_secs) {
