@@ -1,0 +1,27 @@
+main/scheduler/scheduler.cpp
+  s_2bbce5b17ce86b::t_e432fcb7412167 39-45,82,282-290,343-349,356-359,393-397
+main/Kconfig.projbuild
+  s_2bbce5b17ce86b::t_35ca736fb29965 27-35
+main/webp_player/webp_player.h
+  s_2bbce5b17ce86b::t_c5cae7598a9f62 75-81
+main/network/handlers.cpp
+  s_2bbce5b17ce86b::t_188d6b2d09912e 609-611,617
+main/webp_player/webp_player.cpp
+  s_2bbce5b17ce86b::t_befcf2da8e303c 31-34,37-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.11",
+  "base_commit_sha": "1ee13e622e12b40aa337f900b5b5cba5f1201224",
+  "prompts": {},
+  "sessions": {
+    "s_2bbce5b17ce86b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b839f2ad-6450-49a2-af49-063bff16857a",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>"
+    }
+  }
+}
