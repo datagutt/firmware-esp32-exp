@@ -24,6 +24,15 @@ menu "Application Configuration"
         help
             Default time to show an app/image before refreshing.
 
+    config BACKGROUND_DWELL_CAP_SECONDS
+        int "Max dwell when brightness is 0 (seconds)"
+        default 30
+        range 5 600
+        help
+            While brightness is 0%, each WebP's dwell time is capped so the device
+            returns for the next image sooner. Keeps HTTP/WebSocket playlists warm
+            when the panel looks off. Ignored when brightness is above 0.
+
     config ENABLE_AP_MODE
         bool "Enable AP Mode"
         default y

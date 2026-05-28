@@ -28,7 +28,29 @@
 
 static const char* TAG = "webp_player";
 
+#ifndef CONFIG_BACKGROUND_DWELL_CAP_SECONDS
+#define CONFIG_BACKGROUND_DWELL_CAP_SECONDS 30
+#endif
+
 ESP_EVENT_DEFINE_BASE(GFX_PLAYER_EVENTS);
+
+int32_t effective_dwell_for_brightness(uint8_t brightness_pct,
+                                       int32_t dwell_secs) {
+  int cap = CONFIG_BACKGROUND_DWELL_CAP_SECONDS;
+  if (cap < 5) {
+    cap = 5;
+  }
+  // remote_get may leave brightness unset (-1), seen as 255 when written to u8
+  if (brightness_pct > 100) {
+    return dwell_secs;
+  }
+  if (brightness_pct == 0 && dwell_secs > cap) {
+    ESP_LOGI(TAG, "Brightness 0%%: capping dwell %lds -> %ds (background fetch)",
+             static_cast<long>(dwell_secs), cap);
+    return static_cast<int32_t>(cap);
+  }
+  return dwell_secs;
+}
 
 namespace {
 

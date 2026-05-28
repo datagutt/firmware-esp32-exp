@@ -340,6 +340,7 @@ void http_apply_prefetch() {
              static_cast<long>(DEFAULT_REFRESH_INTERVAL));
     dwell = DEFAULT_REFRESH_INTERVAL;
   }
+  dwell = effective_dwell_for_brightness(ctx.prefetch.brightness_pct, dwell);
   int counter = gfx_update(ctx.prefetch.webp, ctx.prefetch.len, dwell);
   if (counter < 0) {
     ESP_LOGE(TAG, "Failed to queue HTTP-fetched WebP");

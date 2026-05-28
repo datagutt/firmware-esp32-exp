@@ -606,13 +606,15 @@ void handle_binary_message(esp_websocket_event_data_t* data) {
   if (data->fin && frame_complete) {
     ESP_LOGD(TAG, "WebP download complete (%zu bytes)", s_ws_accumulated_len);
 
-    int counter = gfx_update(s_webp, s_ws_accumulated_len, s_dwell_secs);
+    int32_t dwell_gfx =
+        effective_dwell_for_brightness(display_get_brightness(), s_dwell_secs);
+    int counter = gfx_update(s_webp, s_ws_accumulated_len, dwell_gfx);
     if (counter < 0) {
       ESP_LOGE(TAG, "Failed to queue downloaded WebP");
       free(s_webp);
     } else {
       ESP_LOGI(TAG, "Queued WS image counter=%d size=%zu dwell=%" PRId32,
-               counter, s_ws_accumulated_len, s_dwell_secs);
+               counter, s_ws_accumulated_len, dwell_gfx);
     }
 
     if (counter >= 0 && !s_first_image_received) {

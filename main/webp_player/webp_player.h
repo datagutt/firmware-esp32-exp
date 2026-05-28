@@ -70,6 +70,14 @@ void gfx_shutdown(void);
 int gfx_update(void* webp, size_t len, int32_t dwell_secs);
 
 /**
+ * Cap dwell time while the panel is dark (brightness 0%) so the device returns
+ * for the next image sooner, keeping HTTP/WebSocket playlists warm. Returns
+ * @p dwell_secs unchanged when brightness is above 0 or unset (>100).
+ */
+int32_t effective_dwell_for_brightness(uint8_t brightness_pct,
+                                       int32_t dwell_secs);
+
+/**
  * Play an embedded sprite from flash.
  * Uses direct pointer (no copy). Loops forever until stopped or replaced.
  * @param name  Sprite name: "boot", "config", "error_404", "no_connect",
