@@ -1,0 +1,23 @@
+main/webp_player/webp_player.cpp
+  1142cf68be5f94bf 300-312,320,324-328,332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "abcf2b4c95489fc12d919f0b4a914076c384725d",
+  "prompts": {
+    "1142cf68be5f94bf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bdfd4405-8d09-4a53-b5a1-ed311ce4e9b1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Thomas Lekanger",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 17,
+      "accepted_lines": 20,
+      "overriden_lines": 0
+    }
+  }
+}
