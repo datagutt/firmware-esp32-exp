@@ -1,6 +1,6 @@
 PROJECT_NAME := firmware
 
-.PHONY: all clean fullclean flash monitor menuconfig help tidbyt-gen1 tidbyt-gen1_swap tidbyt-gen2 tronbyt-s3 tronbyt-s3-wide pixoticker matrixportal-s3 matrixportal-s3-waveshare branded brand-all
+.PHONY: all clean fullclean flash monitor menuconfig help tidbyt-gen1 tidbyt-gen1_swap tidbyt-gen2 tronbyt-s3 tronbyt-s3-wide pixoticker matrixportal-s3 matrixportal-s3-waveshare waveshare-s3 branded brand-all
 
 help:
 	@echo "Tronbyt Firmware Build System"
@@ -22,6 +22,7 @@ help:
 	@echo "  pixoticker               Build for Pixoticker"
 	@echo "  matrixportal-s3          Build for MatrixPortal S3"
 	@echo "  matrixportal-s3-waveshare Build for MatrixPortal S3 (Waveshare)"
+	@echo "  waveshare-s3             Build for Waveshare ESP32-S3-RGB-Matrix"
 	@echo ""
 	@echo "Branded Builds:"
 	@echo "  branded BOARD=<b> BRAND=<n> CHIP=<c>  Build a single board with brand overlay"
@@ -82,6 +83,9 @@ matrixportal-s3:
 
 matrixportal-s3-waveshare:
 	$(call build_device,esp32s3,sdkconfig.defaults.matrixportal-s3-waveshare)
+
+waveshare-s3:
+	$(call build_device,esp32s3,sdkconfig.defaults.waveshare-s3)
 
 # Macro for branded device builds (base + board + brand overlay)
 # Usage: $(call build_device_branded,<target>,<board_defaults>,<brand_cfg>)

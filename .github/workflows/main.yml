@@ -71,6 +71,7 @@ jobs:
           - pixoticker
           - matrixportal-s3
           - matrixportal-s3-waveshare
+          - waveshare-s3
 
     env:
       IDF_CCACHE_ENABLE: "1"
@@ -117,7 +118,7 @@ jobs:
 
           # Determine chip type based on target
           case "$target" in
-            tronbyt-s3*|matrixportal-s3*)
+            tronbyt-s3*|matrixportal-s3*|waveshare-s3*)
               chip="esp32s3"
               ;;
             *)
@@ -160,7 +161,7 @@ jobs:
           target="${{ matrix.target }}"
 
           case "$target" in
-            tronbyt-s3*|matrixportal-s3*)
+            tronbyt-s3*|matrixportal-s3*|waveshare-s3*)
               chip="esp32s3"
               ;;
             *)

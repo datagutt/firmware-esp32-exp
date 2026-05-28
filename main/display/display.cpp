@@ -132,6 +132,26 @@ int display_initialize(void) {
     mxconfig.pins.b2 = 39;
   }
   ESP_LOGI(TAG, "Board preset: MatrixPortal S3");
+#elif CONFIG_BOARD_WAVESHARE_S3
+  // The board has 74HC245 level shifters that remap GPIO signals between the
+  // ESP32 and HUB75 connector. Pins must match the ESP32 GPIO side, not the
+  // HUB75 connector side. Sourced from Waveshare's official sdkconfig.defaults.
+  // This variant doesn't support color swapping, use fixed pins.
+  mxconfig.pins.r1 = 4;
+  mxconfig.pins.g1 = 5;
+  mxconfig.pins.b1 = 6;
+  mxconfig.pins.r2 = 7;
+  mxconfig.pins.g2 = 15;
+  mxconfig.pins.b2 = 16;
+  mxconfig.pins.a = 18;
+  mxconfig.pins.b = 8;
+  mxconfig.pins.c = 3;
+  mxconfig.pins.d = 42;
+  mxconfig.pins.e = 9;
+  mxconfig.pins.lat = 40;
+  mxconfig.pins.oe = 2;
+  mxconfig.pins.clk = 41;
+  ESP_LOGI(TAG, "Board preset: Waveshare ESP32-S3-RGB-Matrix");
 #else  // GEN1 from here down.
   mxconfig.pins.a = 26;
   mxconfig.pins.b = 5;
