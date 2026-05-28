@@ -1,0 +1,27 @@
+main/Kconfig.projbuild
+  s_a0b9f4f5e2b94c::t_dcdd9258ff2dde 27-35
+main/webp_player/webp_player.cpp
+  s_a0b9f4f5e2b94c::t_74c33045440197 31-34,37-53
+main/webp_player/webp_player.h
+  s_a0b9f4f5e2b94c::t_74c33045440197 73-79
+main/scheduler/scheduler.cpp
+  s_a0b9f4f5e2b94c::t_41d50746b3c25c 343
+main/network/handlers.cpp
+  s_a0b9f4f5e2b94c::t_c428123c4f619e 609-611,617
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b837deb166737113d8241c6daec810449a5f052d",
+  "prompts": {},
+  "sessions": {
+    "s_a0b9f4f5e2b94c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4676eec8-3b10-4dd4-8e4b-5872c5222275",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "datagutt <datagutt@lekanger.no>"
+    }
+  }
+}
