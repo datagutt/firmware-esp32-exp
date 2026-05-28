@@ -29,6 +29,7 @@ constexpr const char* NVS_KEY_SKIP_VERSION = "skip_ver";
 constexpr const char* NVS_KEY_SKIP_BOOT = "skip_boot";
 constexpr const char* NVS_KEY_AP_MODE = "ap_mode";
 constexpr const char* NVS_KEY_PREFER_IPV6 = "prefer_ipv6";
+constexpr const char* NVS_KEY_DISABLE_TOUCH = "dis_touch";
 
 // Atomic save keys — blob-based config persistence
 constexpr const char* NVS_KEY_CFG_CUR = "cfg";
@@ -105,6 +106,7 @@ esp_err_t persist_to_nvs() {
   nvs.set_u8(NVS_KEY_SKIP_BOOT, s_config.skip_boot_animation ? 1 : 0);
   nvs.set_u8(NVS_KEY_AP_MODE, s_config.ap_mode ? 1 : 0);
   nvs.set_u8(NVS_KEY_PREFER_IPV6, s_config.prefer_ipv6 ? 1 : 0);
+  nvs.set_u8(NVS_KEY_DISABLE_TOUCH, s_config.disable_touch ? 1 : 0);
   nvs.commit();
 
   return err;
@@ -254,6 +256,9 @@ esp_err_t nvs_settings_init(void) {
 
       if (nvs.get_u8(NVS_KEY_PREFER_IPV6, &val_u8) == ESP_OK)
         s_config.prefer_ipv6 = (val_u8 != 0);
+
+      if (nvs.get_u8(NVS_KEY_DISABLE_TOUCH, &val_u8) == ESP_OK)
+        s_config.disable_touch = (val_u8 != 0);
     }
   }
 

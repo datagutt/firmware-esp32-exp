@@ -33,6 +33,7 @@ typedef struct {
   bool skip_boot_animation;
   bool ap_mode;
   bool prefer_ipv6;
+  bool disable_touch;
 } system_config_t;
 
 /// Initialize NVS and load settings into the config struct.

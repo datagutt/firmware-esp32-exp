@@ -148,17 +148,23 @@ extern "C" void app_main(void) {
   esp_register_shutdown_handler(&display_shutdown);
 
 #ifdef CONFIG_BOARD_TIDBYT_GEN2
-  // Initialize touch controls (GPIO33 on Tidbyt Gen2)
-  ESP_LOGI(TAG, "Initializing touch control...");
-  esp_err_t touch_ret = touch_control_init();
-  if (touch_ret == ESP_OK) {
-    ESP_LOGI(TAG, "Touch control ready on GPIO33");
-    touch_control_debug_all_pads();
+  // Initialize touch controls (GPIO33 on Tidbyt Gen2). Skipping init entirely
+  // when disabled also means the touch_poll task is never spawned, so there is
+  // no polling overhead.
+  if (!cfg.disable_touch) {
+    ESP_LOGI(TAG, "Initializing touch control...");
+    esp_err_t touch_ret = touch_control_init();
+    if (touch_ret == ESP_OK) {
+      ESP_LOGI(TAG, "Touch control ready on GPIO33");
+      touch_control_debug_all_pads();
 
-    xTaskCreate(touch_task, "touch_poll", 2048, nullptr, 2, nullptr);
+      xTaskCreate(touch_task, "touch_poll", 2048, nullptr, 2, nullptr);
+    } else {
+      ESP_LOGW(TAG, "Touch control init failed: %s (continuing without touch)",
+               esp_err_to_name(touch_ret));
+    }
   } else {
-    ESP_LOGW(TAG, "Touch control init failed: %s (continuing without touch)",
-             esp_err_to_name(touch_ret));
+    ESP_LOGI(TAG, "Touch control disabled via NVS");
   }
 #endif
 

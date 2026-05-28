@@ -43,6 +43,17 @@ constexpr const char* SWAP_COLORS_FMT =
     "</div>";
 #endif
 
+#if CONFIG_BOARD_TIDBYT_GEN2
+constexpr const char* DISABLE_TOUCH_FMT =
+    "<div class='form-group'>"
+    "<label>"
+    "<input type='checkbox' id='disable_touch' name='disable_touch' value='1' "
+    "%s>"
+    " Disable Touch Button (Gen2 only - requires reboot)"
+    "</label>"
+    "</div>";
+#endif
+
 struct __attribute__((packed)) DnsHeader {
   uint16_t id;
   uint16_t flags;
@@ -167,6 +178,14 @@ esp_err_t root_handler(httpd_req_t* req) {
   swap_section = swap_buf;
 #endif
 
+  const char* touch_section = "";
+#if CONFIG_BOARD_TIDBYT_GEN2
+  char touch_buf[256];
+  snprintf(touch_buf, sizeof(touch_buf), DISABLE_TOUCH_FMT,
+           cfg.disable_touch ? "checked" : "");
+  touch_section = touch_buf;
+#endif
+
   const char* brand_name = CONFIG_BRAND_NAME;
   const char* url_hide = "";
 #ifdef CONFIG_LOCK_SERVER_URL
@@ -175,15 +194,16 @@ esp_err_t root_handler(httpd_req_t* req) {
 
   ESP_LOGI(TAG, "Serving root page");
   const char* accent = CONFIG_BRAND_ACCENT_COLOR;
-  int len = snprintf(nullptr, 0, setup_html_start, brand_name, accent,
-                     brand_name, url_hide, image_url, api_key, swap_section);
+  int len =
+      snprintf(nullptr, 0, setup_html_start, brand_name, accent, brand_name,
+               url_hide, image_url, api_key, swap_section, touch_section);
   auto* buf = static_cast<char*>(malloc(len + 1));
   if (!buf) {
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                "Out of memory");
   }
   snprintf(buf, len + 1, setup_html_start, brand_name, accent, brand_name,
-           url_hide, image_url, api_key, swap_section);
+           url_hide, image_url, api_key, swap_section, touch_section);
   httpd_resp_set_type(req, "text/html");
   esp_err_t ret = httpd_resp_send(req, buf, len);
   free(buf);
@@ -309,6 +329,8 @@ esp_err_t save_handler(httpd_req_t* req) {
   char api_key[MAX_API_KEY_LEN + 1] = {0};
   char swap_val[2] = {0};
   bool swap_colors = false;
+  char touch_val[4] = {0};
+  bool disable_touch = false;
 
   if (httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid)) != ESP_OK) {
     ESP_LOGD(TAG, "SSID param missing");
@@ -334,6 +356,11 @@ esp_err_t save_handler(httpd_req_t* req) {
     swap_colors = (strcmp(swap_val, "1") == 0);
   }
 
+  if (httpd_query_key_value(buf, "disable_touch", touch_val,
+                            sizeof(touch_val)) == ESP_OK) {
+    disable_touch = (strcmp(touch_val, "1") == 0);
+  }
+
   url_decode(ssid);
   url_decode(password);
   url_decode(image_url);
@@ -353,8 +380,11 @@ esp_err_t save_handler(httpd_req_t* req) {
     extract_key_from_url(image_url, discard, sizeof(discard));
   }
 
-  ESP_LOGI(TAG, "Received SSID: %s, Image URL: %s, Swap Colors: %s", ssid,
-           image_url, swap_colors ? "true" : "false");
+  ESP_LOGI(TAG,
+           "Received SSID: %s, Image URL: %s, Swap Colors: %s, Disable Touch: "
+           "%s",
+           ssid, image_url, swap_colors ? "true" : "false",
+           disable_touch ? "true" : "false");
 
   {
     auto cfg = config_get();
@@ -374,6 +404,7 @@ esp_err_t save_handler(httpd_req_t* req) {
 #endif
     snprintf(cfg.api_key, sizeof(cfg.api_key), "%s", api_key);
     cfg.swap_colors = swap_colors;
+    cfg.disable_touch = disable_touch;
     config_set(&cfg);
   }
 

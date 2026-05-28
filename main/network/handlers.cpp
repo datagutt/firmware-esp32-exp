@@ -370,6 +370,14 @@ void process_text_message(const char* json_str) {
     }
   }
 
+  cJSON* disable_touch_item = cJSON_GetObjectItem(root, "disable_touch");
+  if (cJSON_IsBool(disable_touch_item)) {
+    bool val = cJSON_IsTrue(disable_touch_item);
+    cfg.disable_touch = val;
+    ESP_LOGI(TAG, "Updated disable_touch to %d", val);
+    settings_changed = true;
+  }
+
   if (has_hostname) {
     snprintf(cfg.hostname, sizeof(cfg.hostname), "%s", hostname_value);
     wifi_set_hostname(hostname_value);
