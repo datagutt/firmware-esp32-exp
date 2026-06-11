@@ -116,6 +116,31 @@ int display_initialize(void) {
   mxconfig.pins.oe = 25;
   mxconfig.pins.clk = 22;
   ESP_LOGI(TAG, "Board preset: Pixoticker");
+#elif CONFIG_BOARD_MATRIXPORTAL_S3_WIDE
+  // Same wiring as the MatrixPortal S3, but the E address line is routed to
+  // GPIO 8 so the board can drive a 128x64 panel (1/32 scan).
+  mxconfig.pins.r1 = 42;
+  mxconfig.pins.r2 = 38;
+  mxconfig.pins.a = 45;
+  mxconfig.pins.b = 36;
+  mxconfig.pins.c = 48;
+  mxconfig.pins.d = 35;
+  mxconfig.pins.e = 8;
+  mxconfig.pins.lat = 47;
+  mxconfig.pins.oe = 14;
+  mxconfig.pins.clk = 2;
+  if (swap_colors) {
+    mxconfig.pins.g1 = 41;
+    mxconfig.pins.b1 = 40;
+    mxconfig.pins.g2 = 39;
+    mxconfig.pins.b2 = 37;
+  } else {
+    mxconfig.pins.g1 = 40;
+    mxconfig.pins.b1 = 41;
+    mxconfig.pins.g2 = 37;
+    mxconfig.pins.b2 = 39;
+  }
+  ESP_LOGI(TAG, "Board preset: MatrixPortal S3 Wide");
 #elif CONFIG_BOARD_MATRIXPORTAL_S3
   mxconfig.pins.r1 = 42;
   mxconfig.pins.r2 = 38;
