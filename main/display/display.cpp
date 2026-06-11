@@ -79,11 +79,18 @@ int display_initialize(void) {
   ESP_LOGI(TAG, "Board preset: Tronbyt S3 Wide");
 #elif CONFIG_BOARD_TRONBYT_S3
   mxconfig.pins.r1 = 4;
-  mxconfig.pins.g1 = 6;
-  mxconfig.pins.b1 = 5;
   mxconfig.pins.r2 = 7;
-  mxconfig.pins.g2 = 16;
-  mxconfig.pins.b2 = 15;
+  if (swap_colors) {
+    mxconfig.pins.g1 = 5;
+    mxconfig.pins.b1 = 6;
+    mxconfig.pins.g2 = 15;
+    mxconfig.pins.b2 = 16;
+  } else {
+    mxconfig.pins.g1 = 6;
+    mxconfig.pins.b1 = 5;
+    mxconfig.pins.g2 = 16;
+    mxconfig.pins.b2 = 15;
+  }
   mxconfig.pins.a = 17;
   mxconfig.pins.b = 18;
   mxconfig.pins.c = 8;

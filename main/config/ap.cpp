@@ -33,7 +33,8 @@ TimerHandle_t s_ap_shutdown_timer = nullptr;
 extern const char setup_html_start[] asm("_binary_setup_html_start");
 extern const char success_html_start[] asm("_binary_success_html_start");
 
-#if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3
+#if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3 || \
+    CONFIG_BOARD_TRONBYT_S3
 constexpr const char* SWAP_COLORS_FMT =
     "<div class='form-group'>"
     "<label>"
@@ -171,7 +172,8 @@ esp_err_t root_handler(httpd_req_t* req) {
   const char* image_url = cfg.image_url[0] ? cfg.image_url : "";
   const char* api_key = cfg.api_key[0] ? cfg.api_key : "";
   const char* swap_section = "";
-#if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3
+#if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3 || \
+    CONFIG_BOARD_TRONBYT_S3
   char swap_buf[192];
   snprintf(swap_buf, sizeof(swap_buf), SWAP_COLORS_FMT,
            cfg.swap_colors ? "checked" : "");
