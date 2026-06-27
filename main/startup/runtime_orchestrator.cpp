@@ -10,6 +10,7 @@
 
 #include "ap.h"
 #include "app_state.h"
+#include "diag_event_ring.h"
 #include "display.h"
 #include "event_bus.h"
 #include "heap_monitor.h"
@@ -152,6 +153,30 @@ void runtime_task(void*) {
   }
 
   heap_monitor_log_status("pre-connect");
+
+  bool is_tls = (strncmp(image_url, "https://", 8) == 0) ||
+                (strncmp(image_url, "wss://", 6) == 0);
+  if (!is_tls) {
+    ESP_LOGW(TAG, "Server URL is plaintext (%s): credentials and images are "
+                  "sent unencrypted and can be intercepted", image_url);
+    diag_event_log("WARN", "insecure_url", 0, "Plaintext server URL in use");
+#ifdef CONFIG_REQUIRE_TLS_URLS
+    ESP_LOGE(TAG, "CONFIG_REQUIRE_TLS_URLS set; refusing plaintext URL");
+    if (gfx_display_asset("config")) { /* best-effort */ }
+    app_state_enter_config_portal();
+    // Wait for a new (hopefully TLS) URL instead of fetching over plaintext.
+    while (true) {
+      xEventGroupWaitBits(s_config_event_group, CONFIG_CHANGED_BIT, pdTRUE,
+                          pdTRUE, pdMS_TO_TICKS(10000));
+      cfg = config_get();
+      if (strncmp(cfg.image_url, "https://", 8) == 0 ||
+          strncmp(cfg.image_url, "wss://", 6) == 0) {
+        image_url = cfg.image_url;
+        break;
+      }
+    }
+#endif
+  }
 
   app_state_enter_normal();
   scheduler_init();
