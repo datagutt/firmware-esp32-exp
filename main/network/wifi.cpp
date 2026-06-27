@@ -58,8 +58,29 @@ esp_timer_handle_t s_health_timer = nullptr;
 constexpr int64_t HEALTH_CHECK_INTERVAL_US = 30000 * 1000;  // 30 seconds
 void health_timer_callback(void*) { wifi_health_check(); }
 
+esp_timer_handle_t s_reconnect_timer = nullptr;
+constexpr uint32_t RECONNECT_BASE_MS = 1000;
+constexpr uint32_t RECONNECT_MAX_MS = 60000;
+void reconnect_timer_cb(void*) { esp_wifi_connect(); }
+
+// Computes a per-attempt reconnect delay with full jitter in [50%, 100%] of
+// BASE * 2^(attempt-1), capped at RECONNECT_MAX_MS. Jitter de-synchronizes
+// fleets of devices that all lost the same AP simultaneously.
+uint32_t reconnect_delay_us() {
+  uint32_t shift = s_reconnect_attempts > 0
+                       ? (uint32_t)(s_reconnect_attempts - 1)
+                       : 0;
+  if (shift > 16) shift = 16;  // guard against overflow before the shift
+  uint64_t base = (uint64_t)RECONNECT_BASE_MS << shift;
+  if (base > RECONNECT_MAX_MS) base = RECONNECT_MAX_MS;
+  uint32_t half = (uint32_t)(base / 2);
+  uint32_t jittered = half + (esp_random() % (half + 1));
+  return jittered * 1000u;  // ms -> us
+}
+
 void handle_successful_ip_acquisition() {
   s_reconnect_attempts = 0;
+  if (s_reconnect_timer) esp_timer_stop(s_reconnect_timer);
   s_connection_given_up = false;
   xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
   xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
@@ -118,10 +139,15 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
                    MAX_RECONNECT_ATTEMPTS);
           s_connection_given_up = true;
         } else if (!s_connection_given_up) {
-          ESP_LOGI(TAG,
-                   "WiFi disconnected, trying to reconnect... (attempt %d)",
-                   s_reconnect_attempts);
-          esp_wifi_connect();
+          uint32_t delay_us = reconnect_delay_us();
+          ESP_LOGI(TAG, "WiFi disconnected, reconnect in %lu ms (attempt %d)",
+                   (unsigned long)(delay_us / 1000), s_reconnect_attempts);
+          if (s_reconnect_timer) {
+            esp_timer_stop(s_reconnect_timer);  // cancel any pending attempt
+            esp_timer_start_once(s_reconnect_timer, delay_us);
+          } else {
+            esp_wifi_connect();  // fallback if timer unavailable
+          }
         }
         break;
       }
@@ -264,6 +290,12 @@ int wifi_initialize(const char* ssid, const char* password) {
   esp_timer_create(&health_args, &s_health_timer);
   esp_timer_start_periodic(s_health_timer, HEALTH_CHECK_INTERVAL_US);
 
+  esp_timer_create_args_t reconnect_args = {};
+  reconnect_args.callback = reconnect_timer_cb;
+  reconnect_args.name = "wifi_reconnect";
+  reconnect_args.skip_unhandled_events = true;
+  esp_timer_create(&reconnect_args, &s_reconnect_timer);
+
   ESP_LOGI(TAG, "WiFi initialized successfully");
   return 0;
 }
@@ -273,6 +305,11 @@ void wifi_shutdown(void) {
     esp_timer_stop(s_health_timer);
     esp_timer_delete(s_health_timer);
     s_health_timer = nullptr;
+  }
+  if (s_reconnect_timer) {
+    esp_timer_stop(s_reconnect_timer);
+    esp_timer_delete(s_reconnect_timer);
+    s_reconnect_timer = nullptr;
   }
 
   ap_stop();
