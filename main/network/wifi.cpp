@@ -63,13 +63,20 @@ constexpr uint32_t RECONNECT_BASE_MS = 1000;
 constexpr uint32_t RECONNECT_MAX_MS = 60000;
 void reconnect_timer_cb(void*) { esp_wifi_connect(); }
 
+// --- Multi-network state ---------------------------------------------------
+// Only engaged when 2+ networks are stored. With 0 or 1 stored networks the
+// code below this point behaves exactly as the original single-credential path.
+constexpr int MAX_ATTEMPTS_PER_NET = 3;
+wifi_network_t s_candidates[MAX_WIFI_NETS] = {};
+int s_candidate_count = 0;  // ranked candidates to try this cycle
+int s_candidate_idx = 0;    // candidate currently being attempted
+int s_per_net_attempts = 0;  // consecutive disconnects against the current one
+
 // Computes a per-attempt reconnect delay with full jitter in [50%, 100%] of
 // BASE * 2^(attempt-1), capped at RECONNECT_MAX_MS. Jitter de-synchronizes
 // fleets of devices that all lost the same AP simultaneously.
-uint32_t reconnect_delay_us() {
-  uint32_t shift = s_reconnect_attempts > 0
-                       ? (uint32_t)(s_reconnect_attempts - 1)
-                       : 0;
+uint32_t reconnect_delay_us_for(int attempt) {
+  uint32_t shift = attempt > 0 ? (uint32_t)(attempt - 1) : 0;
   if (shift > 16) shift = 16;  // guard against overflow before the shift
   uint64_t base = (uint64_t)RECONNECT_BASE_MS << shift;
   if (base > RECONNECT_MAX_MS) base = RECONNECT_MAX_MS;
@@ -78,12 +85,126 @@ uint32_t reconnect_delay_us() {
   return jittered * 1000u;  // ms -> us
 }
 
+// Schedule a reconnect of the currently-configured credential after a jittered
+// backoff (or connect immediately if the timer is unavailable).
+void schedule_reconnect(int attempt) {
+  uint32_t delay_us = reconnect_delay_us_for(attempt);
+  ESP_LOGI(TAG, "Reconnect in %lu ms", (unsigned long)(delay_us / 1000));
+  if (s_reconnect_timer) {
+    esp_timer_stop(s_reconnect_timer);  // cancel any pending attempt
+    esp_timer_start_once(s_reconnect_timer, delay_us);
+  } else {
+    esp_wifi_connect();
+  }
+}
+
+// Apply candidate `idx`'s credentials and start connecting. Resets the per-net
+// attempt counter. WIFI_CONNECT_AP_BY_SIGNAL picks the strongest BSSID when an
+// SSID is served by multiple access points (mesh/roaming).
+void connect_to_candidate(int idx) {
+  if (idx < 0 || idx >= s_candidate_count) return;
+  s_candidate_idx = idx;
+  s_per_net_attempts = 0;
+
+  wifi_config_t sta = {};
+  memcpy(sta.sta.ssid, s_candidates[idx].ssid, sizeof(sta.sta.ssid));
+  memcpy(sta.sta.password, s_candidates[idx].password,
+         sizeof(sta.sta.password));
+  sta.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+  sta.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+  esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &sta);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "set_config failed for '%s': %s", s_candidates[idx].ssid,
+             esp_err_to_name(err));
+  }
+  ESP_LOGI(TAG, "Connecting to candidate %d/%d: %s", idx + 1, s_candidate_count,
+           s_candidates[idx].ssid);
+  esp_wifi_connect();
+}
+
+// Build the ranked candidate list for this connection cycle. Every stored
+// network is a candidate; with 2+ stored we run an active scan and rank by live
+// RSSI (descending), breaking ties by user priority (ascending). Networks not
+// seen in the scan sort last but are still attempted. Returns the count.
+int build_candidates() {
+  wifi_network_t stored[MAX_WIFI_NETS];
+  size_t stored_n = wifi_network_list_get(stored, MAX_WIFI_NETS);
+  s_candidate_count = 0;
+  s_candidate_idx = 0;
+  if (stored_n == 0) return 0;
+
+  for (size_t i = 0; i < stored_n; i++) s_candidates[i] = stored[i];
+  s_candidate_count = (int)stored_n;
+
+  if (stored_n < 2) return s_candidate_count;  // single network: no scan
+
+  wifi_scan_config_t scan_cfg = {};
+  scan_cfg.show_hidden = true;
+  if (esp_wifi_scan_start(&scan_cfg, true) == ESP_OK) {
+    uint16_t ap_num = 0;
+    esp_wifi_scan_get_ap_num(&ap_num);
+    if (ap_num > 40) ap_num = 40;  // cap the transient allocation
+    wifi_ap_record_t* recs =
+        ap_num ? static_cast<wifi_ap_record_t*>(
+                     malloc(ap_num * sizeof(wifi_ap_record_t)))
+               : nullptr;
+    if (recs) {
+      uint16_t got = ap_num;
+      esp_wifi_scan_get_ap_records(&got, recs);  // also frees the internal list
+      for (int c = 0; c < s_candidate_count; c++) {
+        int8_t best = -127;
+        bool seen = false;
+        for (uint16_t r = 0; r < got; r++) {
+          if (strncmp(reinterpret_cast<const char*>(recs[r].ssid),
+                      s_candidates[c].ssid, MAX_SSID_LEN) == 0) {
+            seen = true;
+            if (recs[r].rssi > best) best = recs[r].rssi;
+          }
+        }
+        s_candidates[c].last_rssi = seen ? best : -127;  // unseen ranks last
+      }
+      free(recs);
+    } else {
+      esp_wifi_clear_ap_list();  // nothing allocated; release internal list
+    }
+  } else {
+    ESP_LOGW(TAG, "Scan failed; ranking by stored RSSI");
+  }
+
+  // Insertion-friendly selection sort: RSSI desc, then priority asc.
+  for (int a = 0; a < s_candidate_count; a++) {
+    for (int b = a + 1; b < s_candidate_count; b++) {
+      bool swap = (s_candidates[b].last_rssi != s_candidates[a].last_rssi)
+                      ? (s_candidates[b].last_rssi > s_candidates[a].last_rssi)
+                      : (s_candidates[b].priority < s_candidates[a].priority);
+      if (swap) {
+        wifi_network_t t = s_candidates[a];
+        s_candidates[a] = s_candidates[b];
+        s_candidates[b] = t;
+      }
+    }
+  }
+  ESP_LOGI(TAG, "Ranked %d candidate network(s); best: %s (%d dBm)",
+           s_candidate_count, s_candidates[0].ssid, s_candidates[0].last_rssi);
+  return s_candidate_count;
+}
+
 void handle_successful_ip_acquisition() {
   s_reconnect_attempts = 0;
+  s_per_net_attempts = 0;
   if (s_reconnect_timer) esp_timer_stop(s_reconnect_timer);
   s_connection_given_up = false;
   xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
   xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+
+  // Record the signal strength of the AP we landed on so the next boot can rank
+  // this network by a real measurement rather than a stale/unknown value.
+  wifi_ap_record_t ap_info;
+  if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+    wifi_network_note_rssi(reinterpret_cast<const char*>(ap_info.ssid),
+                           ap_info.rssi);
+  }
+
   event_bus_emit_simple(TRONBYT_EVENT_WIFI_CONNECTED);
   app_state_set_connectivity(CONNECTIVITY_CONNECTED);
 }
@@ -95,7 +216,9 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
       case WIFI_EVENT_STA_START:
         s_reconnect_attempts = 0;
         s_connection_given_up = false;
-        esp_wifi_connect();
+        // The first connect is driven explicitly from wifi_initialize after
+        // candidate ranking; reconnects are driven by the disconnect handler
+        // and the reconnect/health timers. So no esp_wifi_connect() here.
         break;
       case WIFI_EVENT_STA_CONNECTED:
         // Only create an IPv6 link-local when the user has opted in.
@@ -131,23 +254,43 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
                          "Repeated disconnects in 60s window");
         }
 
-        if (config_get().ap_mode &&
-            s_reconnect_attempts >= MAX_RECONNECT_ATTEMPTS &&
-            !s_connection_given_up) {
-          ESP_LOGW(TAG,
-                   "Maximum reconnection attempts (%d) reached, giving up",
+        if (s_connection_given_up) {
+          // Already gave up this cycle; wait for the portal or a reboot.
+        } else if (s_candidate_count > 1) {
+          // Multi-network: retry the current candidate a few times, then fail
+          // over to the next ranked network.
+          s_per_net_attempts++;
+          if (s_per_net_attempts < MAX_ATTEMPTS_PER_NET) {
+            ESP_LOGI(TAG, "Reconnect '%s' (try %d/%d)",
+                     s_candidates[s_candidate_idx].ssid, s_per_net_attempts,
+                     MAX_ATTEMPTS_PER_NET);
+            schedule_reconnect(s_per_net_attempts);
+          } else if (s_candidate_idx + 1 < s_candidate_count) {
+            ESP_LOGI(TAG, "Network '%s' unreachable, trying '%s'",
+                     s_candidates[s_candidate_idx].ssid,
+                     s_candidates[s_candidate_idx + 1].ssid);
+            connect_to_candidate(s_candidate_idx + 1);
+          } else if (config_get().ap_mode) {
+            ESP_LOGW(TAG, "All %d networks exhausted, raising portal",
+                     s_candidate_count);
+            s_connection_given_up = true;
+          } else {
+            // No portal fallback: restart the cycle from the strongest network.
+            // Each attempt blocks on a real connect timeout, so this is not a
+            // busy loop; the health check still force-reboots if it never sticks.
+            ESP_LOGW(TAG, "All %d networks exhausted, restarting cycle",
+                     s_candidate_count);
+            connect_to_candidate(0);
+          }
+        } else if (config_get().ap_mode &&
+                   s_reconnect_attempts >= MAX_RECONNECT_ATTEMPTS) {
+          ESP_LOGW(TAG, "Maximum reconnection attempts (%d) reached, giving up",
                    MAX_RECONNECT_ATTEMPTS);
           s_connection_given_up = true;
-        } else if (!s_connection_given_up) {
-          uint32_t delay_us = reconnect_delay_us();
-          ESP_LOGI(TAG, "WiFi disconnected, reconnect in %lu ms (attempt %d)",
-                   (unsigned long)(delay_us / 1000), s_reconnect_attempts);
-          if (s_reconnect_timer) {
-            esp_timer_stop(s_reconnect_timer);  // cancel any pending attempt
-            esp_timer_start_once(s_reconnect_timer, delay_us);
-          } else {
-            esp_wifi_connect();  // fallback if timer unavailable
-          }
+        } else {
+          // Single network (or none ranked yet): original backoff behaviour.
+          ESP_LOGI(TAG, "WiFi disconnected (attempt %d)", s_reconnect_attempts);
+          schedule_reconnect(s_reconnect_attempts);
         }
         break;
       }
@@ -237,22 +380,14 @@ int wifi_initialize(const char* ssid, const char* password) {
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6,
                                              &wifi_event_handler, nullptr));
 
-  bool has_credentials = (strlen(settings.ssid) > 0);
+  bool has_credentials = (wifi_network_list_count() > 0);
 
   if (settings.ap_mode) {
     ap_configure();
   } else {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
   }
-
-  if (has_credentials) {
-    wifi_config_t sta_config = {};
-    memcpy(sta_config.sta.ssid, settings.ssid, sizeof(sta_config.sta.ssid));
-    memcpy(sta_config.sta.password, settings.password,
-           sizeof(sta_config.sta.password));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
-    ESP_LOGI(TAG, "Configured STA with SSID: %s", settings.ssid);
-  }
+  // Per-network credentials are applied after the post-start scan/ranking below.
 
   ESP_ERROR_CHECK(esp_wifi_start());
   wifi_apply_power_save();
@@ -268,7 +403,15 @@ int wifi_initialize(const char* ssid, const char* password) {
            tx_power * 0.25f);
 #endif
 
-  if (!has_credentials) {
+  if (has_credentials) {
+    // Rank stored networks (active scan when 2+ are stored) and connect to the
+    // strongest visible candidate. Failover is handled on disconnect.
+    if (build_candidates() > 0) {
+      connect_to_candidate(0);
+    } else {
+      ESP_LOGW(TAG, "Stored networks present but none selectable");
+    }
+  } else {
     if (settings.ap_mode) {
       ESP_LOGI(
           TAG,
@@ -338,6 +481,17 @@ int wifi_get_mac(uint8_t mac[6]) {
   return 0;
 }
 
+int wifi_get_ssid_str(char* buf, size_t buf_len) {
+  if (!buf || buf_len == 0) return 1;
+  wifi_ap_record_t ap;
+  if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+    snprintf(buf, buf_len, "%s", reinterpret_cast<const char*>(ap.ssid));
+    return 0;
+  }
+  buf[0] = '\0';
+  return 1;
+}
+
 int wifi_get_ip_str(char* buf, size_t buf_len) {
   if (!s_sta_netif || !buf || buf_len < 16) return 1;
   esp_netif_ip_info_t ip_info;
@@ -401,8 +555,8 @@ bool wifi_wait_for_connection(uint32_t timeout_ms) {
     return true;
   }
 
-  if (strlen(config_get().ssid) == 0) {
-    ESP_LOGI(TAG, "No saved config, won't connect.");
+  if (wifi_network_list_count() == 0) {
+    ESP_LOGI(TAG, "No saved networks, won't connect.");
     return false;
   }
 
@@ -465,7 +619,7 @@ void wifi_health_check(void) {
     esp_restart();
   }
 
-  if (strlen(config_get().ssid) > 0) {
+  if (wifi_network_list_count() > 0) {
     ESP_LOGI(TAG, "Reconnecting in Health check...");
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
@@ -473,7 +627,7 @@ void wifi_health_check(void) {
                esp_err_to_name(err));
     }
   } else {
-    ESP_LOGW(TAG, "No SSID configured, cannot reconnect");
+    ESP_LOGW(TAG, "No networks configured, cannot reconnect");
   }
 }
 

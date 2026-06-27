@@ -80,7 +80,7 @@ void runtime_task(void*) {
   // Determine whether we need the captive-portal setup flow.
   bool need_setup = false;
   if (cfg.ap_mode) {
-    bool has_wifi_creds = (strlen(cfg.ssid) > 0);
+    bool has_wifi_creds = (wifi_network_list_count() > 0);
     if (s_button_boot || (!sta_connected && !has_wifi_creds)) {
       need_setup = true;
       ESP_LOGW(TAG, "Boot button pressed or no WiFi credentials configured");
