@@ -184,4 +184,13 @@ menu "Application Configuration"
         help
             GPIO pin for the button.
 
+    config REQUIRE_TLS_URLS
+        bool "Reject plaintext (http/ws) server URLs"
+        default n
+        help
+          When enabled, the firmware refuses to start image fetching with a
+          plaintext http:// or ws:// server URL and waits for an https/wss URL.
+          When disabled (default), plaintext URLs are allowed but logged as a
+          warning. The OTA URL path is unaffected.
+
 endmenu
