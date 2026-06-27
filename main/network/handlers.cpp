@@ -314,7 +314,11 @@ void process_text_message(const char* json_str) {
           ota_task_entry, "ota_task", 8192, ota_url, 5,
           nullptr, tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
       if (ota_rc != pdPASS) {
-        xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+        BaseType_t fb = xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+        if (fb != pdPASS) {
+          ESP_LOGE(TAG, "Failed to create OTA task; dropping request");
+          free(ota_url);  // no task will run to free it
+        }
       }
     }
   }
