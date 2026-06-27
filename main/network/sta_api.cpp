@@ -69,48 +69,6 @@ const char* reset_reason_to_string(esp_reset_reason_t reason) {
   }
 }
 
-// ── Auth helpers ────────────────────────────────────────────────────
-
-// Constant-time compare of two NUL-terminated strings of equal intended length.
-// Avoids a timing oracle on the api_key value.
-bool ct_equal(const char* a, const char* b) {
-  size_t la = strlen(a), lb = strlen(b);
-  unsigned char diff = (unsigned char)(la ^ lb);
-  size_t n = la < lb ? la : lb;
-  for (size_t i = 0; i < n; ++i) diff |= (unsigned char)(a[i] ^ b[i]);
-  return diff == 0;
-}
-
-// Returns true if the request may proceed. On denial, sends 401 and returns false.
-// Policy: if no api_key is configured, allow (fail-open) and log a warning so the
-// operator is nudged to set one. If a key IS set, require "Authorization: Bearer <key>".
-bool require_write_auth(httpd_req_t* req) {
-  auto cfg = config_get();
-  if (cfg.api_key[0] == '\0') {
-    ESP_LOGW(TAG, "Unauthenticated write to %s: no api_key configured", req->uri);
-    diag_event_log("WARN", "api_no_auth", 0,
-                   "State-changing API used with no api_key set");
-    return true;
-  }
-
-  size_t hlen = httpd_req_get_hdr_value_len(req, "Authorization");
-  char hdr[7 + MAX_API_KEY_LEN + 1];  // "Bearer " + key + NUL
-  if (hlen == 0 || hlen >= sizeof(hdr) ||
-      httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr)) != ESP_OK) {
-    httpd_resp_set_status(req, "401 Unauthorized");
-    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or invalid Authorization");
-    return false;
-  }
-
-  if (strncmp(hdr, "Bearer ", 7) != 0 || !ct_equal(hdr + 7, cfg.api_key)) {
-    diag_event_log("WARN", "api_auth_fail", 0, "Bearer token mismatch");
-    httpd_resp_set_status(req, "401 Unauthorized");
-    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unauthorized");
-    return false;
-  }
-  return true;
-}
-
 // ── Existing endpoints ─────────────────────────────────────────────
 
 esp_err_t status_handler(httpd_req_t* req) {
@@ -377,7 +335,6 @@ esp_err_t system_config_get_handler(httpd_req_t* req) {
 }
 
 esp_err_t system_config_post_handler(httpd_req_t* req) {
-  if (!require_write_auth(req)) return ESP_FAIL;  // 401 already sent
   char content[512];
   int ret = httpd_req_recv(req, content, sizeof(content) - 1);
   if (ret <= 0) {
@@ -539,7 +496,6 @@ esp_err_t time_zonedb_handler(httpd_req_t* req) {
 }
 
 esp_err_t reboot_handler(httpd_req_t* req) {
-  if (!require_write_auth(req)) return ESP_FAIL;  // 401 already sent
   httpd_resp_set_type(req, "application/json");
   httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
 
@@ -551,7 +507,6 @@ esp_err_t reboot_handler(httpd_req_t* req) {
 }
 
 esp_err_t ota_upload_handler(httpd_req_t* req) {
-  if (!require_write_auth(req)) return ESP_FAIL;  // 401 already sent
   esp_err_t err = ota_http_upload_perform(req);
   if (err != ESP_OK) {
     return err;  // Error response already sent by ota_http_upload_perform
