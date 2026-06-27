@@ -54,6 +54,8 @@ make tidbyt-gen2
 make tronbyt-s3
 ```
 
+Before pushing, run `make verify` to execute the local quality gate (host unit tests, clang-format drift check, and cppcheck when available).
+
 To flash the built firmware to your device:
 
 ```bash

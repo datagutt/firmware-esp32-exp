@@ -1,6 +1,6 @@
 PROJECT_NAME := firmware
 
-.PHONY: all clean fullclean flash monitor menuconfig help tidbyt-gen1 tidbyt-gen1_swap tidbyt-gen2 tronbyt-s3 tronbyt-s3-wide pixoticker matrixportal-s3 matrixportal-s3-waveshare waveshare-s3 branded brand-all
+.PHONY: all clean fullclean flash monitor menuconfig help tidbyt-gen1 tidbyt-gen1_swap tidbyt-gen2 tronbyt-s3 tronbyt-s3-wide pixoticker matrixportal-s3 matrixportal-s3-waveshare waveshare-s3 branded brand-all verify
 
 help:
 	@echo "Tronbyt Firmware Build System"
@@ -27,6 +27,9 @@ help:
 	@echo "Branded Builds:"
 	@echo "  branded BOARD=<b> BRAND=<n> CHIP=<c>  Build a single board with brand overlay"
 	@echo "  brand-all BRAND=<name>                Build all boards for a brand"
+
+verify:
+	bash verify.sh
 
 IDFPY := $(shell which idf.py)
 PYTHON := python3
