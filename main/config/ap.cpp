@@ -11,6 +11,7 @@
 #include <esp_wifi.h>
 #include <lwip/sockets.h>
 
+#include "board_caps.h"
 #include "http_server.h"
 #include "nvs_settings.h"
 #include "ota_http_upload.h"
@@ -33,8 +34,7 @@ TimerHandle_t s_ap_shutdown_timer = nullptr;
 extern const char setup_html_start[] asm("_binary_setup_html_start");
 extern const char success_html_start[] asm("_binary_success_html_start");
 
-#if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3 || \
-    CONFIG_BOARD_TRONBYT_S3
+#if BOARD_HAS_SWAP_COLORS
 constexpr const char* SWAP_COLORS_FMT =
     "<div class='form-group'>"
     "<label>"
@@ -44,7 +44,7 @@ constexpr const char* SWAP_COLORS_FMT =
     "</div>";
 #endif
 
-#if CONFIG_BOARD_TIDBYT_GEN2
+#if BOARD_HAS_TOUCH
 constexpr const char* DISABLE_TOUCH_FMT =
     "<div class='form-group'>"
     "<label>"
@@ -201,8 +201,7 @@ esp_err_t root_handler(httpd_req_t* req) {
   html_escape(cfg.image_url[0] ? cfg.image_url : "", image_url_esc, sizeof(image_url_esc));
   html_escape(cfg.api_key[0]   ? cfg.api_key   : "", api_key_esc,   sizeof(api_key_esc));
   const char* swap_section = "";
-#if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3 || \
-    CONFIG_BOARD_TRONBYT_S3
+#if BOARD_HAS_SWAP_COLORS
   char swap_buf[192];
   snprintf(swap_buf, sizeof(swap_buf), SWAP_COLORS_FMT,
            cfg.swap_colors ? "checked" : "");
@@ -210,7 +209,7 @@ esp_err_t root_handler(httpd_req_t* req) {
 #endif
 
   const char* touch_section = "";
-#if CONFIG_BOARD_TIDBYT_GEN2
+#if BOARD_HAS_TOUCH
   char touch_buf[256];
   snprintf(touch_buf, sizeof(touch_buf), DISABLE_TOUCH_FMT,
            cfg.disable_touch ? "checked" : "");
