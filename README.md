@@ -128,6 +128,8 @@ Available on the device's IP once connected to WiFi. All endpoints return JSON a
 | `POST` | `/api/system/reboot` | Trigger device reboot |
 | `POST` | `/api/ota/upload` | Upload firmware binary or TBUP bundle (see [OTA Bundle Updates](#ota-bundle-updates)) |
 
+**Authentication.** The three state-changing endpoints (`POST /api/ota/upload`, `POST /api/system/reboot`, `POST /api/system/config`) require an `Authorization: Bearer <api_key>` header when an `api_key` is configured in NVS. Configuring an `api_key` is strongly recommended. When no `api_key` is set the device allows these requests and logs a warning. GET endpoints remain accessible without authentication.
+
 ### WebSocket Interface
 
 The device connects to the server via WebSocket. Messages are handled as follows:
