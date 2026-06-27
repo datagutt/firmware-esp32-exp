@@ -9,14 +9,13 @@
 #include <esp_partition.h>
 
 #include "diag_event_ring.h"
+#include "ota_bundle.h"
 #include "webui_server.h"
 
 namespace {
 
 const char* TAG = "ota_upload";
 constexpr int OTA_BUF_SIZE = 1024;
-constexpr uint32_t TBUP_MAGIC = 0x50554254;  // "TBUP" little-endian
-constexpr size_t TBUP_HEADER_SIZE = 16;
 constexpr size_t FLASH_SECTOR_SIZE = 4096;
 
 // Stream `total` bytes from the HTTP request into an OTA handle, using `buf`
@@ -100,59 +99,54 @@ esp_err_t ota_http_upload_perform(httpd_req_t* req) {
     return ESP_FAIL;
   }
 
-  // Check for TBUP bundle magic
-  uint32_t first_word = 0;
-  if (static_cast<size_t>(received) >= sizeof(uint32_t)) {
-    memcpy(&first_word, buf, sizeof(first_word));
+  // Parse and validate the TBUP bundle header (pure; no I/O).
+  tbup_header_t tbup = {};
+  tbup_result_t tbup_result = tbup_parse_header(
+      reinterpret_cast<const uint8_t*>(buf),
+      static_cast<size_t>(received),
+      req->content_len,
+      &tbup);
+
+  if (tbup_result == TBUP_ERR_HEADER_SHORT) {
+    ESP_LOGE(TAG, "First chunk too small for TBUP header");
+    diag_event_log("ERROR", "ota_validate_fail", -1,
+                   "Bundle header too small");
+    free(buf);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid bundle header");
+    return ESP_FAIL;
+  } else if (tbup_result == TBUP_ERR_SIZE_MISMATCH) {
+    ESP_LOGE(TAG, "Content-Length %zu != header+app+webui (%lu)",
+             req->content_len,
+             (unsigned long)(TBUP_HEADER_SIZE + tbup.app_size + tbup.webui_size));
+    diag_event_log("ERROR", "ota_validate_fail", -1,
+                   "Bundle content length mismatch");
+    free(buf);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bundle size mismatch");
+    return ESP_FAIL;
+  } else if (tbup_result == TBUP_ERR_APP_EMPTY) {
+    ESP_LOGE(TAG, "Bundle app_size is zero");
+    diag_event_log("ERROR", "ota_validate_fail", -1,
+                   "Bundle app size is zero");
+    free(buf);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty app in bundle");
+    return ESP_FAIL;
   }
 
-  const bool is_bundle = (first_word == TBUP_MAGIC);
+  const bool is_bundle = (tbup_result != TBUP_NOT_BUNDLE);
 
   if (is_bundle) {
     // --- Bundle mode: TBUP header + app binary + optional webui image ---
     ESP_LOGI(TAG, "TBUP bundle detected");
 
-    if (static_cast<size_t>(received) < TBUP_HEADER_SIZE) {
-      ESP_LOGE(TAG, "First chunk too small for TBUP header");
-      diag_event_log("ERROR", "ota_validate_fail", -1,
-                     "Bundle header too small");
-      free(buf);
-      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid bundle header");
-      return ESP_FAIL;
-    }
-
-    uint32_t app_size = 0;
-    uint32_t webui_size = 0;
-    memcpy(&app_size, buf + 4, sizeof(app_size));
-    memcpy(&webui_size, buf + 8, sizeof(webui_size));
+    uint32_t app_size = tbup.app_size;
+    uint32_t webui_size = tbup.webui_size;
 
     ESP_LOGI(TAG, "Bundle: app=%lu bytes, webui=%lu bytes",
              (unsigned long)app_size, (unsigned long)webui_size);
 
-    // Validate content length matches header
-    if (req->content_len != TBUP_HEADER_SIZE + app_size + webui_size) {
-      ESP_LOGE(TAG, "Content-Length %zu != header+app+webui (%lu)",
-               req->content_len,
-               (unsigned long)(TBUP_HEADER_SIZE + app_size + webui_size));
-      diag_event_log("ERROR", "ota_validate_fail", -1,
-                     "Bundle content length mismatch");
-      free(buf);
-      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bundle size mismatch");
-      return ESP_FAIL;
-    }
-
-    if (app_size == 0) {
-      ESP_LOGE(TAG, "Bundle app_size is zero");
-      diag_event_log("ERROR", "ota_validate_fail", -1,
-                     "Bundle app size is zero");
-      free(buf);
-      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty app in bundle");
-      return ESP_FAIL;
-    }
-
     // The first chunk contains the header + start of app data.
-    // app data starts at offset TBUP_HEADER_SIZE in the buffer.
-    size_t app_in_buf = received - TBUP_HEADER_SIZE;
+    // app data starts at offset tbup.app_offset (= TBUP_HEADER_SIZE) in the buffer.
+    size_t app_in_buf = received - tbup.app_offset;
 
     // Validate app magic within the buffered app data
     constexpr size_t kAppDescOffset =

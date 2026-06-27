@@ -22,6 +22,7 @@ extern void touch_on_brightness_set(uint8_t brightness);
 #include "ota.h"
 #include "sdkconfig.h"
 #include "syslog.h"
+#include "webp_frame.h"
 #include "webp_player.h"
 #include "wifi.h"
 
@@ -545,7 +546,11 @@ void handle_binary_message(esp_websocket_event_data_t* data) {
     s_ws_accumulated_len = 0;
     s_oversize_detected = false;
 
-    if (data->payload_len > CONFIG_HTTP_BUFFER_SIZE_MAX) {
+    if (webp_frame_check_offsets((uint32_t)data->payload_offset,
+                                 (uint32_t)data->data_len,
+                                 (uint32_t)data->payload_len,
+                                 (size_t)CONFIG_HTTP_BUFFER_SIZE_MAX) !=
+        WEBP_FRAME_OK) {
       ESP_LOGE(TAG, "WebP size (%d bytes) exceeds max (%d)", data->payload_len,
                CONFIG_HTTP_BUFFER_SIZE_MAX);
       s_oversize_detected = true;
@@ -573,7 +578,10 @@ void handle_binary_message(esp_websocket_event_data_t* data) {
   if (data->op_code == 0 && !s_webp) return;
 
   size_t end_offset = static_cast<size_t>(data->payload_offset) + data->data_len;
-  if (end_offset > CONFIG_HTTP_BUFFER_SIZE_MAX) {
+  webp_frame_check_t frame_chk = webp_frame_check_offsets(
+      (uint32_t)data->payload_offset, (uint32_t)data->data_len,
+      (uint32_t)data->payload_len, (size_t)CONFIG_HTTP_BUFFER_SIZE_MAX);
+  if (frame_chk == WEBP_FRAME_OVERSIZE) {
     ESP_LOGE(TAG, "WebP size (%zu bytes) exceeds max (%d)", end_offset,
              CONFIG_HTTP_BUFFER_SIZE_MAX);
     s_oversize_detected = true;
@@ -585,9 +593,7 @@ void handle_binary_message(esp_websocket_event_data_t* data) {
     s_ws_accumulated_len = 0;
     return;
   }
-
-  if (data->payload_len > 0 &&
-      end_offset > static_cast<size_t>(data->payload_len)) {
+  if (frame_chk == WEBP_FRAME_INVALID_OFFSET) {
     ESP_LOGE(TAG,
              "Invalid WebSocket payload offsets (%zu > total %d); dropping",
              end_offset, data->payload_len);
