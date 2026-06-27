@@ -56,8 +56,7 @@ esp_err_t nvs_settings_init(void);
 size_t wifi_network_list_get(wifi_network_t* out, size_t max);
 
 /// Replace the entire stored list with the first `count` entries of `list`
-/// (empty-SSID entries skipped, capped at MAX_WIFI_NETS). Persists and mirrors
-/// slot 0 into the active credential. Thread-safe.
+/// (empty-SSID entries skipped, capped at MAX_WIFI_NETS). Persists. Thread-safe.
 void wifi_network_list_set(const wifi_network_t* list, size_t count);
 
 /// Add a network, or update the password of an existing one (matched by SSID).
