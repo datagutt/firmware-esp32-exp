@@ -86,16 +86,18 @@ void touch_task(void*) {
     vTaskDelay(pdMS_TO_TICKS(100));  // 100ms polling, responsive enough for tap/hold
   }
 }
+
+// Resync touch state when brightness is changed externally (a server command
+// routed through the network layer). Subscribed to the event bus only while
+// touch is active, which lets the network layer stay board-agnostic instead of
+// calling into touch control via extern linkage.
+void on_brightness_changed(const tronbyt_event_t* event, void*) {
+  display_power_on = true;
+  saved_brightness = static_cast<uint8_t>(event->payload.i32);
+}
 #endif
 
 }  // namespace
-
-#ifdef CONFIG_BOARD_TIDBYT_GEN2
-void touch_on_brightness_set(uint8_t brightness) {
-  display_power_on = true;
-  saved_brightness = brightness;
-}
-#endif
 
 extern "C" void app_main(void) {
   ESP_LOGI(TAG, "App Main Start");
@@ -159,6 +161,10 @@ extern "C" void app_main(void) {
       touch_control_debug_all_pads();
 
       xTaskCreate(touch_task, "touch_poll", 2048, nullptr, 2, nullptr);
+      // Touch is active: keep its on/off + saved-brightness state in sync with
+      // server-side brightness commands via the event bus.
+      event_bus_subscribe(TRONBYT_EVENT_BRIGHTNESS_CHANGED,
+                          on_brightness_changed, nullptr);
     } else {
       ESP_LOGW(TAG, "Touch control init failed: %s (continuing without touch)",
                esp_err_to_name(touch_ret));
