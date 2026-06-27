@@ -321,6 +321,7 @@ static inline uint8_t brightness_percent_to_8bit(uint8_t pct) {
 }
 
 void display_set_brightness(uint8_t brightness_pct) {
+  if (_matrix == NULL) return;
   if (brightness_pct != _brightness) {
     uint8_t brightness_8bit = brightness_percent_to_8bit(brightness_pct);
 
@@ -374,6 +375,7 @@ bool display_wait_frame(uint32_t timeout_ms) {
 
 void display_draw_buffer(const uint8_t *pix, int width, int height) {
   if (!pix || width <= 0 || height <= 0) return;
+  if (_matrix == NULL) return;
   if (width > CONFIG_HUB75_PANEL_WIDTH ||
       height > CONFIG_HUB75_PANEL_HEIGHT) {
     ESP_LOGW(TAG, "Rejecting oversized frame: %dx%d (panel %dx%d)", width,
@@ -423,10 +425,10 @@ void display_draw(const uint8_t *pix, int width, int height) {
     return;
   }
   display_draw_buffer(pix, width, height);
-  _matrix->flip_buffer();
+  if (_matrix != NULL) _matrix->flip_buffer();
 }
 
-void display_clear(void) { _matrix->clear(); }
+void display_clear(void) { if (_matrix != NULL) _matrix->clear(); }
 
 void display_draw_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
   if (_matrix != NULL) {
