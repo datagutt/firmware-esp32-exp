@@ -8,8 +8,11 @@
 #include <esp_http_client.h>
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_random.h>
 #include <esp_system.h>
 #include <esp_tls.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "nvs_settings.h"
 #include "sdkconfig.h"
@@ -19,6 +22,15 @@
 namespace {
 
 const char* TAG = "remote";
+
+constexpr int      REMOTE_MAX_ATTEMPTS  = 3;
+constexpr uint32_t REMOTE_BACKOFF_MS[]  = {0, 500, 1500};
+
+// Retry connection errors and these "try again later" status codes only.
+bool http_status_is_transient(int status) {
+  return status == 408 || status == 425 || status == 429 ||
+         status == 500 || status == 502 || status == 503 || status == 504;
+}
 
 struct RemoteState {
   void* buf;
@@ -236,63 +248,108 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
   config.timeout_ms = 20000;
   config.crt_bundle_attach = esp_crt_bundle_attach;
 
-  esp_http_client_handle_t http = esp_http_client_init(&config);
-  if (!http) {
-    ESP_LOGE(TAG, "HTTP client initialization failed for URL: %s", url);
-    free(state.buf);
-    return 1;
-  }
-
-  if (esp_http_client_set_header(http, "X-Firmware-Version",
-                                 FIRMWARE_VERSION) != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to set firmware version header");
-  }
-
+  // Read auth config once; API key is stable for the lifetime of this call.
   auto cfg = config_get();
-  char auth_header[MAX_API_KEY_LEN + 8];  // "Bearer " + key
-  if (cfg.api_key[0] != '\0') {
-    snprintf(auth_header, sizeof(auth_header), "Bearer %s", cfg.api_key);
-    ESP_LOGD(TAG, "Using Authorization Bearer header");
-    if (esp_http_client_set_header(http, "Authorization", auth_header) !=
-        ESP_OK) {
-      ESP_LOGE(TAG, "Failed to set Authorization header");
+
+  for (int attempt = 0; attempt < REMOTE_MAX_ATTEMPTS; ++attempt) {
+    if (attempt > 0) {
+      uint32_t base   = REMOTE_BACKOFF_MS[attempt];
+      uint32_t jitter = base ? (esp_random() % (base / 2 + 1)) : 0;
+      vTaskDelay(pdMS_TO_TICKS(base + jitter));
+
+      // Reset per-attempt accumulation state.
+      state.len              = 0;
+      state.expected_len     = 0;
+      state.oversize_detected = false;
+      if (state.ota_url) { free(state.ota_url); state.ota_url = nullptr; }
+      state.brightness  = 255;
+      state.dwell_secs  = -1;
+
+      // A previous attempt's callback may have freed the buffer on an OOM/
+      // realloc failure (sets buf to nullptr). Re-allocate so this attempt
+      // starts with a clean receive buffer.
+      if (!state.buf) {
+        state.buf  = heap_caps_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT,
+                                      MALLOC_CAP_SPIRAM);
+        state.size = CONFIG_HTTP_BUFFER_SIZE_DEFAULT;
+        if (!state.buf) {
+          ESP_LOGE(TAG, "couldn't reallocate HTTP receive buffer");
+          // state.ota_url is nullptr (reset above); nothing else to free.
+          return 1;
+        }
+      }
     }
-  }
 
-  esp_err_t err = esp_http_client_perform(http);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "couldn't reach %s: %s", url, esp_err_to_name(err));
-    free(state.buf);
+    esp_http_client_handle_t http = esp_http_client_init(&config);
+    if (!http) {
+      // Re-create fails on this attempt; treat as transient and retry.
+      ESP_LOGW(TAG, "HTTP client init failed (attempt %d/%d)",
+               attempt + 1, REMOTE_MAX_ATTEMPTS);
+      continue;
+    }
+
+    if (esp_http_client_set_header(http, "X-Firmware-Version",
+                                   FIRMWARE_VERSION) != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to set firmware version header");
+    }
+
+    if (cfg.api_key[0] != '\0') {
+      char auth_header[MAX_API_KEY_LEN + 8];  // "Bearer " + key
+      snprintf(auth_header, sizeof(auth_header), "Bearer %s", cfg.api_key);
+      ESP_LOGD(TAG, "Using Authorization Bearer header");
+      if (esp_http_client_set_header(http, "Authorization",
+                                     auth_header) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set Authorization header");
+      }
+    }
+
+    esp_err_t err = esp_http_client_perform(http);
+
+    if (err != ESP_OK) {                     // connection / TLS / timeout
+      ESP_LOGW(TAG, "fetch attempt %d/%d failed: %s", attempt + 1,
+               REMOTE_MAX_ATTEMPTS, esp_err_to_name(err));
+      esp_http_client_cleanup(http);
+      continue;                              // transient -> retry
+    }
+
+    if (state.oversize_detected) {           // fatal: never retry
+      ESP_LOGI(TAG, "Request aborted due to oversize content");
+      *return_status_code = 413;
+      esp_http_client_cleanup(http);
+      free(state.buf);                       // safe even if nullptr (OOM path)
+      free(state.ota_url);
+      return 1;
+    }
+
+    int status_code       = esp_http_client_get_status_code(http);
+    *return_status_code   = status_code;
+
+    if (status_code == 200) {               // success: transfer buffer ownership
+      *buf           = static_cast<uint8_t*>(state.buf);
+      *len           = state.len;
+      *brightness_pct = state.brightness;
+      if (state.dwell_secs > -1 && state.dwell_secs < 300)
+        *dwell_secs = state.dwell_secs;
+      *ota_url = state.ota_url;
+      esp_http_client_cleanup(http);
+      return 0;
+    }
+
+    ESP_LOGW(TAG, "HTTP status %d (attempt %d/%d)", status_code,
+             attempt + 1, REMOTE_MAX_ATTEMPTS);
     esp_http_client_cleanup(http);
-    return 1;
+
+    if (!http_status_is_transient(status_code)) {  // 4xx (not 408/429): fatal
+      free(state.buf);
+      free(state.ota_url);
+      return 1;
+    }
+    // transient status -> loop continues to next attempt
   }
 
-  if (state.oversize_detected) {
-    ESP_LOGI(TAG, "Request aborted due to oversize content");
-    free(state.buf);
-    free(state.ota_url);
-    esp_http_client_cleanup(http);
-    *return_status_code = 413;
-    return 1;
-  }
-
-  int status_code = esp_http_client_get_status_code(http);
-  *return_status_code = status_code;
-  if (status_code != 200) {
-    ESP_LOGE(TAG, "Server returned HTTP status %d", status_code);
-    free(state.buf);
-    free(state.ota_url);
-    esp_http_client_cleanup(http);
-    return 1;
-  }
-
-  *buf = static_cast<uint8_t*>(state.buf);
-  *len = state.len;
-  *brightness_pct = state.brightness;
-  if (state.dwell_secs > -1 && state.dwell_secs < 300)
-    *dwell_secs = state.dwell_secs;
-  *ota_url = state.ota_url;
-
-  esp_http_client_cleanup(http);
-  return 0;
+  // All attempts exhausted without a successful response.
+  ESP_LOGE(TAG, "fetch failed after %d attempts", REMOTE_MAX_ATTEMPTS);
+  free(state.buf);      // safe if nullptr (callback OOM'd the buffer)
+  free(state.ota_url);  // safe if nullptr (no OTA header or reset between attempts)
+  return 1;
 }
