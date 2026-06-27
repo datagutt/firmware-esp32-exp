@@ -7,8 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(host_unit_tests
   test_unit.cpp
   ../../main/system/ota_url_utils.cpp
+  ../../main/system/ota_bundle.cpp
   ../../main/scheduler/scheduler_fsm.cpp
   ../../main/network/config_contract.cpp
+  ../../main/network/webp_frame.cpp
 )
 
 target_include_directories(host_unit_tests PRIVATE
