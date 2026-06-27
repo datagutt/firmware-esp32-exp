@@ -14,6 +14,11 @@ CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 # Configure the flasher for 8MB of flash memory.
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 
+# Roll back to the previous app if the new one never confirms it is healthy.
+# On factory-only boards (4MB pixoticker) the running partition is never in
+# PENDING_VERIFY state, so the confirm call is a no-op there.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
 # Allow firmware updates over insecure HTTP.
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 

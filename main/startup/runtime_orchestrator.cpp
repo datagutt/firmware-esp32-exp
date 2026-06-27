@@ -11,6 +11,7 @@
 #include "ap.h"
 #include "app_state.h"
 #include "diag_event_ring.h"
+#include "ota.h"
 #include "display.h"
 #include "event_bus.h"
 #include "heap_monitor.h"
@@ -179,6 +180,7 @@ void runtime_task(void*) {
   }
 
   app_state_enter_normal();
+  ota_schedule_health_confirm(30000);  // confirm app valid after 30s of normal run
   scheduler_init();
   if (strncmp(image_url, "ws://", 5) == 0 ||
       strncmp(image_url, "wss://", 6) == 0) {
