@@ -57,7 +57,9 @@ esp_err_t msg_send_client_info_now() {
              "Failed to get MAC address; sending client info without MAC.");
   }
 
-  cJSON_AddStringToObject(ci, "ssid", cfg.ssid);
+  char active_ssid[MAX_SSID_LEN + 1] = {0};
+  wifi_get_ssid_str(active_ssid, sizeof(active_ssid));
+  cJSON_AddStringToObject(ci, "ssid", active_ssid);
   cJSON_AddStringToObject(ci, "hostname", cfg.hostname);
   cJSON_AddStringToObject(ci, "syslog_addr", cfg.syslog_addr);
   cJSON_AddStringToObject(ci, "sntp_server", cfg.sntp_server);

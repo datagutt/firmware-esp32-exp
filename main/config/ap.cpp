@@ -67,6 +67,8 @@ struct __attribute__((packed)) DnsHeader {
 // Forward declarations
 esp_err_t root_handler(httpd_req_t* req);
 esp_err_t save_handler(httpd_req_t* req);
+esp_err_t network_delete_handler(httpd_req_t* req);
+char* build_networks_section();
 esp_err_t update_handler(httpd_req_t* req);
 esp_err_t captive_portal_handler(httpd_req_t* req);
 void url_decode(char* str);
@@ -99,6 +101,48 @@ void html_escape(const char* in, char* out, size_t out_size) {
     }
   }
   out[o < out_size ? o : out_size - 1] = '\0';
+}
+
+// Build the "Saved Networks" card for the setup page. Returns a malloc'd,
+// NUL-terminated string the caller must free (empty string on OOM). Each row is
+// a tiny POST form so the browser handles SSID encoding; SSIDs are HTML-escaped.
+char* build_networks_section() {
+  wifi_network_t nets[MAX_WIFI_NETS];
+  size_t n = wifi_network_list_get(nets, MAX_WIFI_NETS);
+
+  const size_t cap = 512 + n * 768;
+  char* out = static_cast<char*>(malloc(cap));
+  if (!out) return strdup("");
+
+  size_t o = 0;
+  // Advance the write cursor by an snprintf result, clamped so o stays < cap.
+  auto adv = [&](int w) {
+    if (w < 0) return;
+    size_t rem = cap - o;
+    o += (static_cast<size_t>(w) < rem) ? static_cast<size_t>(w) : (rem - 1);
+  };
+
+  adv(snprintf(out + o, cap - o, "<div class='card'><h2>Saved Networks</h2>"));
+  if (n == 0) {
+    adv(snprintf(out + o, cap - o,
+                 "<div class='hint'>No networks saved yet.</div>"));
+  }
+  for (size_t i = 0; i < n && o < cap - 1; i++) {
+    char ssid_esc[MAX_SSID_LEN * 6 + 1];
+    html_escape(nets[i].ssid, ssid_esc, sizeof(ssid_esc));
+    adv(snprintf(
+        out + o, cap - o,
+        "<form action='/network/delete' method='post' style='display:flex;"
+        "align-items:center;justify-content:space-between;gap:.5rem;"
+        "margin-bottom:.5rem'>"
+        "<input type='hidden' name='ssid' value='%s'>"
+        "<span style='font-family:var(--mono);font-size:.8125rem;overflow:hidden;"
+        "text-overflow:ellipsis'>%s</span>"
+        "<button type='submit'>Delete</button></form>",
+        ssid_esc, ssid_esc));
+  }
+  adv(snprintf(out + o, cap - o, "</div>"));
+  return out;
 }
 
 void dns_server_task(void* pvParameters) {
@@ -222,18 +266,24 @@ esp_err_t root_handler(httpd_req_t* req) {
   url_hide = "style='display:none'";
 #endif
 
+  char* nets_section = build_networks_section();
+
   ESP_LOGI(TAG, "Serving root page");
   const char* accent = CONFIG_BRAND_ACCENT_COLOR;
   int len =
       snprintf(nullptr, 0, setup_html_start, brand_name, accent, brand_name,
-               url_hide, image_url_esc, api_key_esc, swap_section, touch_section);
+               url_hide, image_url_esc, api_key_esc, swap_section, touch_section,
+               nets_section);
   auto* buf = static_cast<char*>(malloc(len + 1));
   if (!buf) {
+    free(nets_section);
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                "Out of memory");
   }
   snprintf(buf, len + 1, setup_html_start, brand_name, accent, brand_name,
-           url_hide, image_url_esc, api_key_esc, swap_section, touch_section);
+           url_hide, image_url_esc, api_key_esc, swap_section, touch_section,
+           nets_section);
+  free(nets_section);
   httpd_resp_set_type(req, "text/html");
   esp_err_t ret = httpd_resp_send(req, buf, len);
   free(buf);
@@ -418,8 +468,6 @@ esp_err_t save_handler(httpd_req_t* req) {
 
   {
     auto cfg = config_get();
-    snprintf(cfg.ssid, sizeof(cfg.ssid), "%s", ssid);
-    snprintf(cfg.password, sizeof(cfg.password), "%s", password);
 #ifdef CONFIG_LOCK_SERVER_URL
     // When server URL is locked, always use the Kconfig default
     snprintf(cfg.image_url, sizeof(cfg.image_url), "%s",
@@ -436,6 +484,14 @@ esp_err_t save_handler(httpd_req_t* req) {
     cfg.swap_colors = swap_colors;
     cfg.disable_touch = disable_touch;
     config_set(&cfg);
+
+    // Credentials live in the multi-network list (the sole credential store),
+    // not the config blob. Add the new network, or update its password.
+    if (strlen(ssid) > 0) {
+      if (!wifi_network_list_add(ssid, password)) {
+        ESP_LOGW(TAG, "Network list full; '%s' not added", ssid);
+      }
+    }
   }
 
   free(buf);
@@ -459,6 +515,43 @@ esp_err_t save_handler(httpd_req_t* req) {
   ESP_LOGI(TAG, "Configuration saved - rebooting...");
   gfx_safe_restart();
 
+  return ESP_OK;
+}
+
+esp_err_t network_delete_handler(httpd_req_t* req) {
+  char buf[256];
+  int total = req->content_len;
+  if (total <= 0 || total >= static_cast<int>(sizeof(buf))) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
+    return ESP_FAIL;
+  }
+  int received = 0;
+  while (received < total) {
+    int r = httpd_req_recv(req, buf + received, total - received);
+    if (r <= 0) {
+      if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to receive");
+      return ESP_FAIL;
+    }
+    received += r;
+  }
+  buf[received] = '\0';
+
+  char ssid[MAX_SSID_LEN + 1] = {0};
+  if (httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid)) == ESP_OK) {
+    url_decode(ssid);
+    if (wifi_network_list_remove(ssid)) {
+      ESP_LOGI(TAG, "Removed network: %s", ssid);
+    } else {
+      ESP_LOGW(TAG, "Delete requested for unknown network: %s", ssid);
+    }
+  }
+
+  // Redirect back to the setup page so the refreshed list is shown. The change
+  // takes effect on the next reconnect/reboot; we do not tear down a live link.
+  httpd_resp_set_status(req, "303 See Other");
+  httpd_resp_set_hdr(req, "Location", "/setup");
+  httpd_resp_send(req, nullptr, 0);
   return ESP_OK;
 }
 
@@ -541,6 +634,12 @@ esp_err_t ap_start(void) {
                           .handler = save_handler,
                           .user_ctx = nullptr};
   httpd_register_uri_handler(server, &save_uri);
+
+  httpd_uri_t network_delete_uri = {.uri = "/network/delete",
+                                    .method = HTTP_POST,
+                                    .handler = network_delete_handler,
+                                    .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &network_delete_uri);
 
   httpd_uri_t update_uri = {.uri = "/update",
                             .method = HTTP_POST,

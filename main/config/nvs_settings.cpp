@@ -1,5 +1,6 @@
 #include "nvs_settings.h"
 
+#include <cstdlib>
 #include <cstring>
 
 #include <freertos/FreeRTOS.h>
@@ -16,8 +17,6 @@ namespace {
 const char* TAG = "NVS_SETTINGS";
 
 constexpr const char* NVS_NAMESPACE = "wifi_config";
-constexpr const char* NVS_KEY_SSID = "ssid";
-constexpr const char* NVS_KEY_PASSWORD = "password";
 constexpr const char* NVS_KEY_HOSTNAME = "hostname";
 constexpr const char* NVS_KEY_SYSLOG_ADDR = "syslog_addr";
 constexpr const char* NVS_KEY_SNTP_SERVER = "sntp_server";
@@ -35,7 +34,18 @@ constexpr const char* NVS_KEY_DISABLE_TOUCH = "dis_touch";
 constexpr const char* NVS_KEY_CFG_CUR = "cfg";
 constexpr const char* NVS_KEY_CFG_NEW = "cfg_new";
 
+// Multi-network list lives in its own namespace so the main config blob (and
+// its NVS-migration risk) is untouched. A device that loses this blob degrades
+// to a single-credential device via the legacy keys, not a factory reset.
+constexpr const char* NVS_NETS_NAMESPACE = "wifi_nets";
+constexpr const char* NVS_NETS_KEY = "nets";
+
+// Persist a refreshed last_rssi only when it moves at least this much (or was
+// previously unknown), so frequent reconnects don't grind the flash.
+constexpr int RSSI_PERSIST_DELTA_DB = 5;
+
 system_config_t s_config = {};
+wifi_network_t s_nets[MAX_WIFI_NETS] = {};
 SemaphoreHandle_t s_mutex = nullptr;
 uint32_t s_generation = 0;
 
@@ -92,8 +102,6 @@ esp_err_t persist_to_nvs() {
 
   // Also persist individual keys for backward compatibility with
   // existing code that reads them (e.g., on downgrade)
-  nvs.set_str(NVS_KEY_SSID, s_config.ssid);
-  nvs.set_str(NVS_KEY_PASSWORD, s_config.password);
   nvs.set_str(NVS_KEY_HOSTNAME, s_config.hostname);
   nvs.set_str(NVS_KEY_SYSLOG_ADDR, s_config.syslog_addr);
   nvs.set_str(NVS_KEY_SNTP_SERVER, s_config.sntp_server);
@@ -155,6 +163,30 @@ bool load_from_blob() {
   return false;
 }
 
+// --- Multi-network list helpers --------------------------------------------
+
+// Write the in-memory list to its NVS blob. Best-effort. Caller holds s_mutex.
+void persist_nets_locked() {
+  NvsHandle nvs(NVS_NETS_NAMESPACE, NVS_READWRITE);
+  if (!nvs) return;
+  nvs.set_blob(NVS_NETS_KEY, s_nets, sizeof(s_nets));
+  nvs.commit();
+}
+
+// Load the stored network list. If the blob is absent or malformed the list is
+// left empty by design — first boot after flashing comes up to the portal for
+// fresh provisioning. No migration from the old single-credential keys.
+void load_nets() {
+  memset(s_nets, 0, sizeof(s_nets));
+  NvsHandle nvs(NVS_NETS_NAMESPACE, NVS_READONLY);
+  if (!nvs) return;
+  size_t len = sizeof(s_nets);
+  if (nvs.get_blob(NVS_NETS_KEY, s_nets, &len) != ESP_OK ||
+      len != sizeof(s_nets)) {
+    memset(s_nets, 0, sizeof(s_nets));
+  }
+}
+
 }  // namespace
 
 esp_err_t nvs_settings_init(void) {
@@ -207,14 +239,6 @@ esp_err_t nvs_settings_init(void) {
     if (nvs) {
       size_t sz;
 
-      sz = sizeof(s_config.ssid);
-      if (nvs.get_str(NVS_KEY_SSID, s_config.ssid, &sz) != ESP_OK)
-        s_config.ssid[0] = '\0';
-
-      sz = sizeof(s_config.password);
-      if (nvs.get_str(NVS_KEY_PASSWORD, s_config.password, &sz) != ESP_OK)
-        s_config.password[0] = '\0';
-
       sz = sizeof(s_config.hostname);
       if (nvs.get_str(NVS_KEY_HOSTNAME, s_config.hostname, &sz) != ESP_OK)
         s_config.hostname[0] = '\0';
@@ -262,24 +286,29 @@ esp_err_t nvs_settings_init(void) {
     }
   }
 
-  // Apply secrets.json defaults if NVS has no SSID
-  bool save_defaults = false;
-  if (strlen(s_config.ssid) == 0) {
+  // Load the multi-network list before seeding (init is single-threaded).
+  load_nets();
+
+  // Seed the first network and default URL from build-time secrets.json when
+  // nothing is stored yet (fresh device). Credentials go to the network list;
+  // the URL stays in the config blob.
+  bool save_cfg_defaults = false;
+  if (s_nets[0].ssid[0] == '\0') {
     char placeholder_ssid[MAX_SSID_LEN + 1] = WIFI_SSID;
     char placeholder_password[MAX_PASSWORD_LEN + 1] = WIFI_PASSWORD;
     char placeholder_url[MAX_URL_LEN + 1] = REMOTE_URL;
 
     if (strstr(placeholder_ssid, "Xplaceholder") == nullptr &&
         strlen(placeholder_ssid) > 0) {
-      snprintf(s_config.ssid, sizeof(s_config.ssid), "%s", placeholder_ssid);
-
+      snprintf(s_nets[0].ssid, sizeof(s_nets[0].ssid), "%s", placeholder_ssid);
       if (strstr(placeholder_password, "Xplaceholder") == nullptr) {
-        snprintf(s_config.password, sizeof(s_config.password), "%s",
+        snprintf(s_nets[0].password, sizeof(s_nets[0].password), "%s",
                  placeholder_password);
       } else {
-        s_config.password[0] = '\0';
+        s_nets[0].password[0] = '\0';
       }
-      save_defaults = true;
+      persist_nets_locked();
+      ESP_LOGI(TAG, "Seeded WiFi network from secrets: %s", s_nets[0].ssid);
     }
 
     if (strlen(s_config.image_url) == 0 &&
@@ -287,11 +316,11 @@ esp_err_t nvs_settings_init(void) {
         strlen(placeholder_url) > 0) {
       snprintf(s_config.image_url, sizeof(s_config.image_url), "%s",
                placeholder_url);
+      save_cfg_defaults = true;
     }
   }
 
-  if (save_defaults && strlen(s_config.ssid) > 0 &&
-      strlen(s_config.password) > 0) {
+  if (save_cfg_defaults) {
     persist_to_nvs();
   }
 
@@ -312,8 +341,9 @@ esp_err_t nvs_settings_init(void) {
   }
 #endif
 
-  ESP_LOGI(TAG, "Settings initialized. SSID: %s, URL: %s, AP Mode: %d",
-           s_config.ssid, s_config.image_url, s_config.ap_mode);
+  ESP_LOGI(TAG, "Settings initialized. Networks: %u, URL: %s, AP Mode: %d",
+           (unsigned)wifi_network_list_count(), s_config.image_url,
+           s_config.ap_mode);
 
   return ESP_OK;
 }
@@ -342,4 +372,132 @@ uint32_t config_generation(void) {
   uint32_t gen = s_generation;
   xSemaphoreGive(s_mutex);
   return gen;
+}
+
+// --- Multi-network list public API -----------------------------------------
+
+namespace {
+// Persist a list change, bump the config generation (so the web UI sees it),
+// and notify. Caller holds s_mutex; this releases it.
+void commit_list_change_locked() {
+  persist_nets_locked();
+  s_generation++;
+  uint32_t gen = s_generation;
+  xSemaphoreGive(s_mutex);
+  event_bus_emit_i32(TRONBYT_EVENT_CONFIG_CHANGED, static_cast<int32_t>(gen));
+}
+}  // namespace
+
+size_t wifi_network_list_get(wifi_network_t* out, size_t max) {
+  if (!out || max == 0) return 0;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  size_t n = 0;
+  for (size_t i = 0; i < MAX_WIFI_NETS && n < max; i++) {
+    if (s_nets[i].ssid[0] != '\0') out[n++] = s_nets[i];
+  }
+  xSemaphoreGive(s_mutex);
+  return n;
+}
+
+size_t wifi_network_list_count(void) {
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  size_t n = 0;
+  for (size_t i = 0; i < MAX_WIFI_NETS; i++) {
+    if (s_nets[i].ssid[0] != '\0') n++;
+  }
+  xSemaphoreGive(s_mutex);
+  return n;
+}
+
+void wifi_network_list_set(const wifi_network_t* list, size_t count) {
+  if (!list) return;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  memset(s_nets, 0, sizeof(s_nets));
+  size_t n = 0;
+  for (size_t i = 0; i < count && n < MAX_WIFI_NETS; i++) {
+    if (list[i].ssid[0] == '\0') continue;
+    s_nets[n++] = list[i];
+  }
+  commit_list_change_locked();
+}
+
+bool wifi_network_list_add(const char* ssid, const char* password) {
+  if (!ssid || ssid[0] == '\0') return false;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+  int found = -1;
+  int free_slot = -1;
+  for (int i = 0; i < MAX_WIFI_NETS; i++) {
+    if (s_nets[i].ssid[0] == '\0') {
+      if (free_slot < 0) free_slot = i;
+      continue;
+    }
+    if (strncmp(s_nets[i].ssid, ssid, MAX_SSID_LEN) == 0) {
+      found = i;
+      break;
+    }
+  }
+
+  int slot = (found >= 0) ? found : free_slot;
+  if (slot < 0) {
+    xSemaphoreGive(s_mutex);  // list full and SSID is new
+    return false;
+  }
+
+  if (found < 0) {
+    memset(&s_nets[slot], 0, sizeof(s_nets[slot]));
+  }
+  snprintf(s_nets[slot].ssid, sizeof(s_nets[slot].ssid), "%s", ssid);
+  snprintf(s_nets[slot].password, sizeof(s_nets[slot].password), "%s",
+           password ? password : "");
+
+  commit_list_change_locked();
+  return true;
+}
+
+bool wifi_network_list_remove(const char* ssid) {
+  if (!ssid || ssid[0] == '\0') return false;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+  int found = -1;
+  for (int i = 0; i < MAX_WIFI_NETS; i++) {
+    if (s_nets[i].ssid[0] != '\0' &&
+        strncmp(s_nets[i].ssid, ssid, MAX_SSID_LEN) == 0) {
+      found = i;
+      break;
+    }
+  }
+  if (found < 0) {
+    xSemaphoreGive(s_mutex);
+    return false;
+  }
+
+  for (int i = found; i < MAX_WIFI_NETS - 1; i++) {
+    s_nets[i] = s_nets[i + 1];
+  }
+  memset(&s_nets[MAX_WIFI_NETS - 1], 0, sizeof(s_nets[MAX_WIFI_NETS - 1]));
+
+  commit_list_change_locked();
+  return true;
+}
+
+void wifi_network_note_rssi(const char* ssid, int8_t rssi) {
+  if (!ssid || ssid[0] == '\0') return;
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  for (int i = 0; i < MAX_WIFI_NETS; i++) {
+    if (s_nets[i].ssid[0] == '\0' ||
+        strncmp(s_nets[i].ssid, ssid, MAX_SSID_LEN) != 0) {
+      continue;
+    }
+    int prev = s_nets[i].last_rssi;
+    s_nets[i].last_rssi = rssi;
+    // Persist only on a meaningful change to spare the flash on flaky links.
+    bool worth_persisting =
+        prev == 0 || abs(static_cast<int>(rssi) - prev) >= RSSI_PERSIST_DELTA_DB;
+    if (worth_persisting) {
+      persist_nets_locked();
+    }
+    break;
+  }
+  xSemaphoreGive(s_mutex);
 }

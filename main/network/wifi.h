@@ -35,6 +35,12 @@ void wifi_shutdown(void);
 int wifi_get_mac(uint8_t mac[6]);
 
 /**
+ * Write the SSID of the currently-connected access point into buf.
+ * @return 0 on success, non-zero if not connected (buf set to empty string)
+ */
+int wifi_get_ssid_str(char *buf, size_t buf_len);
+
+/**
  * @brief Set Hostname
  *
  * @param hostname Hostname to set
