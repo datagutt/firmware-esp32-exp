@@ -12,11 +12,9 @@
 #include <freertos/task.h>
 
 #include "display.h"
-#ifdef CONFIG_BOARD_TIDBYT_GEN2
-extern void touch_on_brightness_set(uint8_t brightness);
-#endif
 #include "api_validation.h"
 #include "diag_event_ring.h"
+#include "event_bus.h"
 #include "messages.h"
 #include "nvs_settings.h"
 #include "ota.h"
@@ -298,10 +296,10 @@ void process_text_message(const char* json_str) {
   if (has_brightness) {
     display_set_brightness(static_cast<uint8_t>(brightness_value));
     ESP_LOGI(TAG, "Updated brightness to %d", brightness_value);
-#ifdef CONFIG_BOARD_TIDBYT_GEN2
-    // Sync touch control state - server brightness command means display is on
-    touch_on_brightness_set(static_cast<uint8_t>(brightness_value));
-#endif
+    // A server brightness command means the display is on; announce it so any
+    // board-level consumer (e.g. the Gen2 touch controller) can resync its
+    // state. The network layer stays board-agnostic.
+    event_bus_emit_i32(TRONBYT_EVENT_BRIGHTNESS_CHANGED, brightness_value);
   }
 
   if (has_ota_url) {

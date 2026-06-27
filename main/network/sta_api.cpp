@@ -16,10 +16,8 @@
 #include "api_validation.h"
 #include "device_temperature.h"
 #include "display.h"
-#ifdef CONFIG_BOARD_TIDBYT_GEN2
-extern void touch_on_brightness_set(uint8_t brightness);
-#endif
 #include "diag_event_ring.h"
+#include "event_bus.h"
 #include "heap_monitor.h"
 #include "http_server.h"
 #include "mdns_service.h"
@@ -422,9 +420,9 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
   }
   if (has_brightness) {
     display_set_brightness(static_cast<uint8_t>(brightness_value));
-#ifdef CONFIG_BOARD_TIDBYT_GEN2
-    touch_on_brightness_set(static_cast<uint8_t>(brightness_value));
-#endif
+    // Announce the change so board-level consumers (e.g. Gen2 touch control)
+    // can resync; keeps this API handler board-agnostic.
+    event_bus_emit_i32(TRONBYT_EVENT_BRIGHTNESS_CHANGED, brightness_value);
   }
 
   cJSON_Delete(json);
