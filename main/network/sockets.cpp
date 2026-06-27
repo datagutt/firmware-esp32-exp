@@ -15,6 +15,7 @@
 #include "handlers.h"
 #include "messages.h"
 
+#include <atomic>
 #include <cstring>
 
 #include <esp_crt_bundle.h>
@@ -62,7 +63,7 @@ enum class State : uint8_t {
 
 struct SocketContext {
   esp_websocket_client_handle_t client = nullptr;
-  State state = State::Disconnected;
+  std::atomic<State> state{State::Disconnected};
   char* url = nullptr;
   char* auth_header = nullptr;
   bool sent_client_info = false;
@@ -108,15 +109,15 @@ void reconnect_timer_callback(void*) {
     esp_websocket_client_destroy(to_destroy);
   }
 
-  if (ctx.state == State::Ready || ctx.state == State::Disconnected) {
+  if (ctx.state.load() == State::Ready || ctx.state.load() == State::Disconnected) {
     if (wifi_is_connected()) {
       raii::MutexGuard lock(client_mutex);
       if (lock) {
-        ctx.state = State::Ready;
+        ctx.state.store(State::Ready);
         start_client_locked();
       }
     } else {
-      ctx.state = State::Disconnected;
+      ctx.state.store(State::Disconnected);
       ESP_LOGW(TAG, "Network not available, will retry when IP acquired");
     }
   }
@@ -175,7 +176,7 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
   switch (event_id) {
     case WEBSOCKET_EVENT_CONNECTED:
       ESP_LOGI(TAG, "Connected");
-      ctx.state = State::Connected;
+      ctx.state.store(State::Connected);
       sock_failure_count = 0;
       wifi_disconnect_count = 0;
       ctx.sent_client_info = false;
@@ -188,11 +189,11 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
 
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGW(TAG, "Disconnected (state=%d wifi=%d)",
-               static_cast<int>(ctx.state), wifi_is_connected());
+               static_cast<int>(ctx.state.load()), wifi_is_connected());
       draw_error_indicator_pixel();
-      if (ctx.state != State::Ready) {
+      if (ctx.state.load() != State::Ready) {
         bool wifi_up = wifi_is_connected();
-        ctx.state = wifi_up ? State::Ready : State::Disconnected;
+        ctx.state.store(wifi_up ? State::Ready : State::Disconnected);
         event_bus_emit_simple(TRONBYT_EVENT_WS_DISCONNECTED);
         if (wifi_up) {
           app_state_set_connectivity(CONNECTIVITY_CONNECTED);
@@ -215,11 +216,11 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
 
     case WEBSOCKET_EVENT_ERROR:
       ESP_LOGE(TAG, "WebSocket error (state=%d wifi=%d)",
-               static_cast<int>(ctx.state), wifi_is_connected());
+               static_cast<int>(ctx.state.load()), wifi_is_connected());
       draw_error_indicator_pixel();
-      if (ctx.state != State::Ready) {
+      if (ctx.state.load() != State::Ready) {
         bool wifi_up = wifi_is_connected();
-        ctx.state = wifi_up ? State::Ready : State::Disconnected;
+        ctx.state.store(wifi_up ? State::Ready : State::Disconnected);
         scheduler_on_ws_disconnect();
 
         if (escalate_socket_failure()) {
@@ -310,14 +311,14 @@ esp_err_t start_client_locked() {
 
 void on_wifi_event(const tronbyt_event_t* event, void*) {
   if (event->type == TRONBYT_EVENT_WIFI_DISCONNECTED) {
-    if (ctx.state != State::Disconnected) {
+    if (ctx.state.load() != State::Disconnected) {
       ESP_LOGW(TAG, "WiFi disconnected");
-      ctx.state = State::Disconnected;
+      ctx.state.store(State::Disconnected);
     }
   } else if (event->type == TRONBYT_EVENT_WIFI_CONNECTED) {
-    ESP_LOGI(TAG, "Got IP, state=%d", static_cast<int>(ctx.state));
-    if (ctx.state == State::Disconnected) {
-      ctx.state = State::Ready;
+    ESP_LOGI(TAG, "Got IP, state=%d", static_cast<int>(ctx.state.load()));
+    if (ctx.state.load() == State::Disconnected) {
+      ctx.state.store(State::Ready);
       // Avoid first TLS handshake during peak startup activity.
       if (reconnect_timer) {
         esp_timer_stop(reconnect_timer);
@@ -358,14 +359,14 @@ void sockets_init(const char* url) {
 
   // If already connected, start immediately
   if (wifi_is_connected()) {
-    ctx.state = State::Ready;
+    ctx.state.store(State::Ready);
     // Defer first connect slightly to let boot-time tasks (including app_main)
     // release stack/heap before websocket task allocation.
     esp_timer_start_once(reconnect_timer, INITIAL_CONNECT_DELAY_US);
     ESP_LOGI(TAG, "Network ready, deferring initial WS connect by %lld ms",
              INITIAL_CONNECT_DELAY_US / 1000);
   } else {
-    ctx.state = State::Disconnected;
+    ctx.state.store(State::Disconnected);
     ESP_LOGI(TAG, "Waiting for network...");
   }
 }
@@ -404,7 +405,7 @@ void sockets_deinit() {
     ctx.auth_header = nullptr;
   }
 
-  ctx.state = State::Disconnected;
+  ctx.state.store(State::Disconnected);
 
   handlers_deinit();
 
