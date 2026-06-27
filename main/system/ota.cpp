@@ -11,6 +11,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <lwip/netdb.h>
@@ -141,6 +142,35 @@ bool validate_and_rewrite_url(const char* url, char* out_url,
 }  // namespace
 
 bool ota_in_progress(void) { return s_ota_in_progress.load(); }
+
+// Marks the running app valid IFF it is in the pending-verify state (i.e. this
+// boot is the first boot after an OTA). No-op on factory/already-valid apps, so
+// it is safe on the 4MB factory-only board and on USB-flashed images.
+void ota_confirm_running_app(void) {
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  esp_ota_img_states_t state;
+  if (esp_ota_get_state_partition(running, &state) != ESP_OK) return;
+  if (state == ESP_OTA_IMG_PENDING_VERIFY) {
+    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+      ESP_LOGI(TAG, "OTA image confirmed valid; rollback cancelled");
+      diag_event_log("INFO", "ota_confirmed", 0, "App marked valid after boot");
+    } else {
+      ESP_LOGE(TAG, "Failed to mark OTA app valid");
+      diag_event_log("ERROR", "ota_confirm_fail", -1, "mark_app_valid failed");
+    }
+  }
+}
+
+void ota_schedule_health_confirm(uint32_t delay_ms) {
+  static esp_timer_handle_t s_confirm_timer = nullptr;
+  if (s_confirm_timer) return;  // once
+  esp_timer_create_args_t args = {};
+  args.callback = [](void*) { ota_confirm_running_app(); };
+  args.name = "ota_confirm";
+  if (esp_timer_create(&args, &s_confirm_timer) == ESP_OK) {
+    esp_timer_start_once(s_confirm_timer, (uint64_t)delay_ms * 1000);
+  }
+}
 
 void run_ota(const char* url) {
   bool expected = false;
