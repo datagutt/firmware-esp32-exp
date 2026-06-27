@@ -74,6 +74,33 @@ void start_dns_server();
 void stop_dns_server();
 void ap_shutdown_timer_callback(TimerHandle_t xTimer);
 
+// Escape a string for safe inclusion in an HTML attribute or text node.
+// Writes a NUL-terminated result; truncates safely if out_size is too small.
+void html_escape(const char* in, char* out, size_t out_size) {
+  size_t o = 0;
+  for (size_t i = 0; in[i] != '\0'; ++i) {
+    const char* rep = nullptr;
+    switch (in[i]) {
+      case '&':  rep = "&amp;";  break;
+      case '<':  rep = "&lt;";   break;
+      case '>':  rep = "&gt;";   break;
+      case '"':  rep = "&quot;"; break;
+      case '\'': rep = "&#39;";  break;
+      default:   break;
+    }
+    if (rep) {
+      size_t rl = strlen(rep);
+      if (o + rl >= out_size) break;
+      memcpy(out + o, rep, rl);
+      o += rl;
+    } else {
+      if (o + 1 >= out_size) break;
+      out[o++] = in[i];
+    }
+  }
+  out[o < out_size ? o : out_size - 1] = '\0';
+}
+
 void dns_server_task(void* pvParameters) {
   int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (sock < 0) {
@@ -169,8 +196,10 @@ void stop_dns_server() {
 
 esp_err_t root_handler(httpd_req_t* req) {
   auto cfg = config_get();
-  const char* image_url = cfg.image_url[0] ? cfg.image_url : "";
-  const char* api_key = cfg.api_key[0] ? cfg.api_key : "";
+  char image_url_esc[128 * 6 + 1];
+  char api_key_esc[128 * 6 + 1];
+  html_escape(cfg.image_url[0] ? cfg.image_url : "", image_url_esc, sizeof(image_url_esc));
+  html_escape(cfg.api_key[0]   ? cfg.api_key   : "", api_key_esc,   sizeof(api_key_esc));
   const char* swap_section = "";
 #if CONFIG_BOARD_TIDBYT_GEN1 || CONFIG_BOARD_MATRIXPORTAL_S3 || \
     CONFIG_BOARD_TRONBYT_S3
@@ -198,14 +227,14 @@ esp_err_t root_handler(httpd_req_t* req) {
   const char* accent = CONFIG_BRAND_ACCENT_COLOR;
   int len =
       snprintf(nullptr, 0, setup_html_start, brand_name, accent, brand_name,
-               url_hide, image_url, api_key, swap_section, touch_section);
+               url_hide, image_url_esc, api_key_esc, swap_section, touch_section);
   auto* buf = static_cast<char*>(malloc(len + 1));
   if (!buf) {
     return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                "Out of memory");
   }
   snprintf(buf, len + 1, setup_html_start, brand_name, accent, brand_name,
-           url_hide, image_url, api_key, swap_section, touch_section);
+           url_hide, image_url_esc, api_key_esc, swap_section, touch_section);
   httpd_resp_set_type(req, "text/html");
   esp_err_t ret = httpd_resp_send(req, buf, len);
   free(buf);
