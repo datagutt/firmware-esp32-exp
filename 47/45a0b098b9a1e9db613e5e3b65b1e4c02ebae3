@@ -1,0 +1,20 @@
+components/webp_decoder/idf_component.yml
+  s_a92a4ecce435bb::t_5bedb3e17f3442 4
+  s_a92a4ecce435bb::t_6ec93bdaae03b0 5-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "4745a0b098b9a1e9db613e5e3b65b1e4c02ebae3",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
