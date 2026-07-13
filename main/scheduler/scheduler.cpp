@@ -345,6 +345,20 @@ void http_apply_prefetch() {
     return;
   }
 
+  // 304: content unchanged since the last fetch. Keep showing the current
+  // image and just re-arm the poll timer with the returned dwell.
+  if (ctx.prefetch.status_code == 304) {
+    display_set_brightness(ctx.prefetch.brightness_pct);
+    ctx.brightness_pct = ctx.prefetch.brightness_pct;
+    int32_t dwell = ctx.prefetch.dwell_secs;
+    if (dwell <= 0) dwell = DEFAULT_REFRESH_INTERVAL;
+    dwell = effective_dwell_for_brightness(ctx.prefetch.brightness_pct, dwell);
+    ctx.prefetch.clear();
+    transition_to(State::PLAYING);
+    start_prefetch_timer(dwell);
+    return;
+  }
+
   // Apply brightness and queue image
   display_set_brightness(ctx.prefetch.brightness_pct);
   ctx.brightness_pct = ctx.prefetch.brightness_pct;

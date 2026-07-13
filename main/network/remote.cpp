@@ -33,6 +33,15 @@ bool http_status_is_transient(int status) {
          status == 500 || status == 502 || status == 503 || status == 504;
 }
 
+constexpr size_t ETAG_MAX = 80;
+constexpr size_t ETAG_URL_MAX = 256;
+
+// Single-slot ETag cache for conditional GETs. remote_get has one caller
+// (the scheduler fetch task), so plain statics need no locking. The cached
+// validator only applies while the poll URL stays the same.
+char s_etag[ETAG_MAX] = {};
+char s_etag_url[ETAG_URL_MAX] = {};
+
 struct RemoteState {
   void* buf;
   size_t len;
@@ -44,6 +53,7 @@ struct RemoteState {
   char* ota_url;
   bool oversize_detected;
   bool quiet;
+  char etag[ETAG_MAX];
 };
 
 template <typename T>
@@ -131,6 +141,8 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
       } else if (strcasecmp(event->header_key, "Tronbyt-Quiet") == 0) {
         state->quiet = atoi(event->header_value) != 0;
         ESP_LOGD(TAG, "Tronbyt-Quiet value: %d", state->quiet);
+      } else if (strcasecmp(event->header_key, "ETag") == 0) {
+        snprintf(state->etag, sizeof(state->etag), "%s", event->header_value);
       }
       break;
 
@@ -240,6 +252,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       .ota_url = nullptr,
       .oversize_detected = false,
       .quiet = false,
+      .etag = {},
   };
 
   if (!state.buf) {
@@ -271,6 +284,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       state.brightness  = 255;
       state.dwell_secs  = -1;
       state.quiet       = false;
+      state.etag[0]     = '\0';
 
       // A previous attempt's callback may have freed the buffer on an OOM/
       // realloc failure (sets buf to nullptr). Re-allocate so this attempt
@@ -310,6 +324,15 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       }
     }
 
+    // Conditional GET: with the cached validator the server can answer 304
+    // and the device skips the download and re-decode of unchanged content.
+    if (s_etag[0] != '\0' && strcmp(s_etag_url, url) == 0) {
+      if (esp_http_client_set_header(http, "If-None-Match", s_etag) !=
+          ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set If-None-Match header");
+      }
+    }
+
     esp_err_t err = esp_http_client_perform(http);
 
     if (err != ESP_OK) {                     // connection / TLS / timeout
@@ -335,6 +358,12 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       // Feed the server quiet signal into the OR-combined quiet-hours engine.
       // Only trust it on a real response, so transient errors do not flip state.
       quiet_hours_set_remote_active(state.quiet);
+      if (state.etag[0] != '\0' && strlen(url) < ETAG_URL_MAX) {
+        snprintf(s_etag, sizeof(s_etag), "%s", state.etag);
+        snprintf(s_etag_url, sizeof(s_etag_url), "%s", url);
+      } else {
+        s_etag[0] = '\0';
+      }
       *buf           = static_cast<uint8_t*>(state.buf);
       *len           = state.len;
       *brightness_pct = state.brightness;
@@ -342,6 +371,19 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
         *dwell_secs = state.dwell_secs;
       *ota_url = state.ota_url;
       esp_http_client_cleanup(http);
+      return 0;
+    }
+
+    if (status_code == 304) {  // not modified: keep displaying current content
+      quiet_hours_set_remote_active(state.quiet);
+      *buf            = nullptr;
+      *len            = 0;
+      *brightness_pct = state.brightness;
+      if (state.dwell_secs > -1 && state.dwell_secs < 300)
+        *dwell_secs = state.dwell_secs;
+      *ota_url = state.ota_url;
+      esp_http_client_cleanup(http);
+      free(state.buf);
       return 0;
     }
 
