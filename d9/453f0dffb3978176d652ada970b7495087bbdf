@@ -1,0 +1,34 @@
+main/display/display.cpp
+  s_a92a4ecce435bb::t_e5fe2981183d87 419-427,430-431,434-435,438-463
+  s_a92a4ecce435bb::t_18c139d97152d0 428-429,432-433,436-437,464-471
+main/webp_player/webp_player.cpp
+  s_a92a4ecce435bb::t_0f4c30434d5764 286-295
+  s_a92a4ecce435bb::t_59e7cd5183e1de 119-124,127-128
+  s_a92a4ecce435bb::t_2142234e61509c 649
+  s_a92a4ecce435bb::t_c225441b1bef24 1008-1009
+  s_a92a4ecce435bb::t_70a7c7d9fbdb6e 597-598
+  s_a92a4ecce435bb::t_c9666a0b213b9d 997
+  s_a92a4ecce435bb::t_93065e71fd03fd 142-152,166-180,190-193,197-199,210,213,216-217,239,253,267-268
+  s_a92a4ecce435bb::t_d91bed5f69ce9a 181-189,194-196,200-209,211-212,214-215,218-238,240-251,254-266
+  s_a92a4ecce435bb::t_4fbacf773e5c40 125-126,129
+  s_a92a4ecce435bb::t_6e0af99a1733c0 153-165
+  s_a92a4ecce435bb::t_8a9c11345096f2 252
+main/display/display.h
+  s_a92a4ecce435bb::t_04222ff7f7c47a 21-23,25-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "d9453f0dffb3978176d652ada970b7495087bbdf",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
