@@ -1,0 +1,21 @@
+main/idf_component.yml
+  s_a92a4ecce435bb::t_3ba7f3e743cb00 9-11
+main/display/display.cpp
+  s_a92a4ecce435bb::t_6c1ab57ba6154a 255-258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "9fdf6b5b3b9918e6c35c833e7e70b5d2a2a7999c",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
