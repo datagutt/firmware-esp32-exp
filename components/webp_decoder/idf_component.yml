@@ -1,4 +1,7 @@
 dependencies:
   libwebp:
     git: https://github.com/datagutt/libwebp.git
-    version: xtensa-pie
+    # Pinned commit for reproducible builds; bump when the fork advances.
+    # 971c22a (main): lossless PIE acceleration plus upstream webm fixes
+    # (xtensa-pie branch merged into main).
+    version: 971c22a5642dec79632187ac477a3c1a5b72c0f1
