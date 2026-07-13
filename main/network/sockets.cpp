@@ -32,6 +32,7 @@
 #include "display.h"
 #include "event_bus.h"
 #include "nvs_settings.h"
+#include "outbox_ring.h"
 #include "raii_utils.hpp"
 #include "scheduler.h"
 #include "webp_player.h"
@@ -59,12 +60,6 @@ constexpr int64_t GOT_IP_CONNECT_DELAY_US = 1500 * 1000;  // 1.5 seconds
 constexpr int MAX_SOCK_FAILURES_BEFORE_WIFI_RESET = 5;
 constexpr int MAX_WIFI_RESETS_BEFORE_RESTART = 3;
 
-// Bounded outbox: messages produced while the socket is down are copied onto
-// a fixed FIFO ring and flushed in order once the link is ready. On overflow
-// the OLDEST entry is dropped (a display device favours the newest state).
-// Depth is a compile-time bound so the queue can never grow unbounded on a
-// long outage.
-constexpr size_t OUTBOX_DEPTH = 12;
 // Per-message send budget when draining the outbox. Kept short so a flush
 // triggered from the WS event task cannot stall it for long.
 constexpr TickType_t OUTBOX_FLUSH_TIMEOUT = pdMS_TO_TICKS(2000);
@@ -93,16 +88,12 @@ SemaphoreHandle_t client_mutex = nullptr;
 int sock_failure_count = 0;
 int wifi_disconnect_count = 0;
 
-// Bounded FIFO outbox. Each occupied slot owns a heap copy of the message.
-// Guarded by its own mutex (never nested with client_mutex: a flush pops
-// under outbox_mutex, releases it, then sends under client_mutex).
-struct OutboxSlot {
-  char* data = nullptr;
-  size_t len = 0;
-};
-OutboxSlot outbox[OUTBOX_DEPTH];
-size_t outbox_head = 0;   // index of the oldest queued message
-size_t outbox_count = 0;  // number of occupied slots
+// Bounded FIFO outbox: messages produced while the socket is down are copied
+// onto the ring and flushed in order once the link is ready. The ring itself
+// is a pure structure (outbox_ring.h, host-tested); it is guarded by its own
+// mutex here (never nested with client_mutex: a flush pops under
+// outbox_mutex, releases it, then sends under client_mutex).
+outbox_ring_t outbox;
 SemaphoreHandle_t outbox_mutex = nullptr;
 
 // Timers
@@ -187,7 +178,7 @@ bool ws_is_connected_now() {
 
 bool outbox_is_empty() {
   raii::MutexGuard lock(outbox_mutex);
-  return !lock || outbox_count == 0;
+  return !lock || outbox_ring_count(&outbox) == 0;
 }
 
 // Take ownership of `copy` (heap-allocated, `len` bytes) and append it. On a
@@ -199,29 +190,16 @@ void outbox_enqueue(char* copy, size_t len) {
     free(copy);
     return;
   }
-  if (outbox_count == OUTBOX_DEPTH) {
-    free(outbox[outbox_head].data);
-    outbox[outbox_head].data = nullptr;
-    outbox_head = (outbox_head + 1) % OUTBOX_DEPTH;
-    outbox_count--;
+  if (outbox_ring_push(&outbox, copy, len)) {
     ESP_LOGW(TAG, "Outbox full, dropping oldest queued message");
   }
-  size_t idx = (outbox_head + outbox_count) % OUTBOX_DEPTH;
-  outbox[idx].data = copy;
-  outbox[idx].len = len;
-  outbox_count++;
 }
 
 // Pop the oldest entry into `out` (caller then owns out->data). Returns false
 // when the ring is empty.
-bool outbox_dequeue(OutboxSlot* out) {
+bool outbox_dequeue(outbox_ring_slot_t* out) {
   raii::MutexGuard lock(outbox_mutex);
-  if (!lock || outbox_count == 0) return false;
-  *out = outbox[outbox_head];
-  outbox[outbox_head].data = nullptr;
-  outbox_head = (outbox_head + 1) % OUTBOX_DEPTH;
-  outbox_count--;
-  return true;
+  return lock && outbox_ring_pop(&outbox, out);
 }
 
 // Drain queued messages in FIFO order while the socket keeps accepting them.
@@ -231,7 +209,7 @@ bool outbox_dequeue(OutboxSlot* out) {
 // for the next connection.
 void outbox_flush() {
   if (!ws_is_connected_now()) return;
-  OutboxSlot slot;
+  outbox_ring_slot_t slot;
   while (outbox_dequeue(&slot)) {
     bool ok = slot.data && ws_send_now(slot.data, slot.len,
                                         OUTBOX_FLUSH_TIMEOUT);
@@ -242,7 +220,7 @@ void outbox_flush() {
 
 // Free every queued message. Used on deinit.
 void outbox_drain_free() {
-  OutboxSlot slot;
+  outbox_ring_slot_t slot;
   while (outbox_dequeue(&slot)) free(slot.data);
 }
 
@@ -463,6 +441,7 @@ void sockets_init(const char* url) {
     client_mutex = nullptr;
     return;
   }
+  outbox_ring_init(&outbox);
 
   handlers_init();
   ctx.url = strdup(url);

@@ -11,6 +11,7 @@ add_executable(host_unit_tests
   ../../main/system/quiet_hours_eval.cpp
   ../../main/scheduler/scheduler_fsm.cpp
   ../../main/network/config_contract.cpp
+  ../../main/network/outbox_ring.cpp
   ../../main/network/webp_frame.cpp
 )
 

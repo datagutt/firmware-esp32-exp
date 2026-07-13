@@ -1,10 +1,12 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "config_contract.h"
 #include "ota_bundle.h"
 #include "ota_url_utils.h"
+#include "outbox_ring.h"
 #include "quiet_hours_eval.h"
 #include "scheduler_fsm.h"
 #include "webp_frame.h"
@@ -213,6 +215,71 @@ static void test_quiet_hours() {
   assert(!quiet_hours_any_active(set, 2, &t));
 }
 
+static void test_outbox_ring() {
+  outbox_ring_t ring;
+  outbox_ring_init(&ring);
+  outbox_ring_slot_t slot = {};
+
+  // Empty ring: nothing to pop.
+  assert(outbox_ring_count(&ring) == 0);
+  assert(!outbox_ring_pop(&ring, &slot));
+
+  // FIFO order is preserved.
+  for (int i = 0; i < 3; i++) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "msg-%d", i);
+    assert(!outbox_ring_push(&ring, strdup(buf), strlen(buf)));
+  }
+  assert(outbox_ring_count(&ring) == 3);
+  for (int i = 0; i < 3; i++) {
+    char expect[16];
+    snprintf(expect, sizeof(expect), "msg-%d", i);
+    assert(outbox_ring_pop(&ring, &slot));
+    assert(slot.len == strlen(expect));
+    assert(strncmp(slot.data, expect, slot.len) == 0);
+    free(slot.data);
+  }
+  assert(!outbox_ring_pop(&ring, &slot));
+
+  // Overflow frees and drops the oldest entry and reports the drop.
+  for (int i = 0; i < OUTBOX_RING_DEPTH; i++) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "m%02d", i);
+    assert(!outbox_ring_push(&ring, strdup(buf), 3));
+  }
+  assert(outbox_ring_push(&ring, strdup("new"), 3));  // drops m00
+  assert(outbox_ring_count(&ring) == OUTBOX_RING_DEPTH);
+
+  // Wraparound: pop one, push one, then drain and verify full FIFO order
+  // across the index seam (m01 was popped, m00 was dropped).
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(strncmp(slot.data, "m01", 3) == 0);
+  free(slot.data);
+  assert(!outbox_ring_push(&ring, strdup("wrp"), 3));
+  for (int i = 2; i < OUTBOX_RING_DEPTH; i++) {
+    char expect[16];
+    snprintf(expect, sizeof(expect), "m%02d", i);
+    assert(outbox_ring_pop(&ring, &slot));
+    assert(strncmp(slot.data, expect, 3) == 0);
+    free(slot.data);
+  }
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(strncmp(slot.data, "new", 3) == 0);
+  free(slot.data);
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(strncmp(slot.data, "wrp", 3) == 0);
+  free(slot.data);
+  assert(outbox_ring_count(&ring) == 0);
+
+  // Clear frees everything and empties the ring.
+  for (int i = 0; i < 5; i++) {
+    assert(!outbox_ring_push(&ring, strdup("x"), 1));
+  }
+  outbox_ring_clear(&ring);
+  assert(outbox_ring_count(&ring) == 0);
+  assert(!outbox_ring_pop(&ring, &slot));
+}
+
 int main() {
   test_ota_url_parser();
   test_config_mutation();
@@ -220,6 +287,7 @@ int main() {
   test_tbup_parser();
   test_webp_frame_offsets();
   test_quiet_hours();
+  test_outbox_ring();
   printf("host_unit_tests: PASS\n");
   return 0;
 }
