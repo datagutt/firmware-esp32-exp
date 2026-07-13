@@ -1,0 +1,21 @@
+sdkconfig.defaults.tronbyt-s3-wide
+  s_a52d19f909d07f::t_cc13d5b8dfd1b1 11
+sdkconfig.defaults.tronbyt-s3
+  s_a52d19f909d07f::t_25a9ac62abd2bb 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "5bec67550556b654132d86fd6e2527f734fd2e54",
+  "prompts": {},
+  "sessions": {
+    "s_a52d19f909d07f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78c01a48-8b6e-4f0e-8f01-d8ccbbbb3325",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
