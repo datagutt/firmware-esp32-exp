@@ -18,6 +18,9 @@ void display_shutdown(void);
 
 void display_draw(const uint8_t* pix, int width, int height);
 void display_draw_buffer(const uint8_t* pix, int width, int height);
+void display_draw_span(const uint8_t* pix, int x, int y, int width,
+                       int canvas_w, int canvas_h);
+bool display_span_supported(int canvas_w, int canvas_h);
 void display_clear(void);
 void display_draw_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b);
 void display_fill_rect(int x, int y, int w, int h, uint8_t r, uint8_t g,

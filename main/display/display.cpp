@@ -416,6 +416,59 @@ void display_draw_buffer(const uint8_t *pix, int width, int height) {
                        Hub75ColorOrder::BGR);
 }
 
+// True when a canvas of this size renders through a path that
+// display_draw_span can reproduce (1:1 native, or the 2x upscale used for
+// 64x32 content on 128x64 panels).
+bool display_span_supported(int canvas_w, int canvas_h) {
+#if CONFIG_HUB75_PANEL_WIDTH == 128 && CONFIG_HUB75_PANEL_HEIGHT == 64
+  if (canvas_w == 64 && canvas_h == 32) return true;
+#endif
+  return canvas_w == CONFIG_HUB75_PANEL_WIDTH &&
+         canvas_h == CONFIG_HUB75_PANEL_HEIGHT;
+}
+
+// Draw a single row segment of RGBA pixels given in canvas coordinates,
+// applying the same scaling display_draw_buffer would use for that canvas.
+// Writes into the active buffer without flipping, so it is only meaningful
+// when double buffering is disabled and the active buffer is live.
+void display_draw_span(const uint8_t *pix, int x, int y, int width,
+                       int canvas_w, int canvas_h) {
+  if (!pix || width <= 0) return;
+  if (_matrix == NULL) return;
+
+#if CONFIG_HUB75_PANEL_WIDTH == 128 && CONFIG_HUB75_PANEL_HEIGHT == 64
+  if (canvas_w == 64 && canvas_h == 32) {
+    // 2x upscale: one canvas row span becomes a doubled-width two-row blit.
+    if (x < 0 || y < 0 || x + width > 64 || y >= 32) return;
+    const int dst_w = width * 2;
+    const uint32_t *src = (const uint32_t *)pix;
+    uint32_t *dst_row1 = &_scale_buf[0];
+    uint32_t *dst_row2 = &_scale_buf[dst_w];
+    for (int sx = 0; sx < width; sx++) {
+      uint32_t pixel = src[sx];
+      dst_row1[sx * 2] = pixel;
+      dst_row1[sx * 2 + 1] = pixel;
+      dst_row2[sx * 2] = pixel;
+      dst_row2[sx * 2 + 1] = pixel;
+    }
+    _matrix->draw_pixels(x * 2, y * 2, dst_w, 2, (uint8_t *)_scale_buf,
+                         Hub75PixelFormat::RGB888_32, Hub75ColorOrder::BGR);
+    return;
+  }
+#endif
+
+  if (canvas_w != CONFIG_HUB75_PANEL_WIDTH ||
+      canvas_h != CONFIG_HUB75_PANEL_HEIGHT) {
+    return;  // Unsupported scale factor for span drawing
+  }
+  if (x < 0 || y < 0 || x + width > CONFIG_HUB75_PANEL_WIDTH ||
+      y >= CONFIG_HUB75_PANEL_HEIGHT) {
+    return;
+  }
+  _matrix->draw_pixels(x, y, width, 1, pix, Hub75PixelFormat::RGB888_32,
+                       Hub75ColorOrder::BGR);
+}
+
 void display_draw(const uint8_t *pix, int width, int height) {
   if (!pix || width <= 0 || height <= 0) return;
   if (width > CONFIG_HUB75_PANEL_WIDTH ||

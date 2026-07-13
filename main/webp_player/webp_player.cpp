@@ -116,6 +116,17 @@ struct PlayerContext {
   WebpDecoderInfo decoder_info = {};
   uint8_t* frame_buf = nullptr;
 
+  // Frame copies for row diffing (lazily allocated). shown_frame mirrors what
+  // the panel displays; back_frame mirrors the back DMA buffer, which after a
+  // flip holds the frame from two flips ago. Anything that draws outside
+  // render_frame_diffed must invalidate both.
+  uint8_t* shown_frame = nullptr;
+  uint8_t* back_frame = nullptr;
+  int prev_w = 0;
+  int prev_h = 0;
+  bool shown_valid = false;
+  bool back_valid = false;
+
   // Timing
   TickType_t next_frame_tick = 0;
   int64_t playback_start_us = 0;
@@ -127,6 +138,133 @@ struct PlayerContext {
 };
 
 PlayerContext ctx;
+
+//------------------------------------------------------------------------------
+// Frame Diffing
+//------------------------------------------------------------------------------
+// Ported from matrx-fw. Skips DMA-buffer writes for content that did not
+// change since the previous frame: identical frames are skipped entirely,
+// mostly-changed frames render in full (which hits the driver's fused
+// full-frame path), and otherwise only the changed span of each dirty row is
+// written. Row spans write into the live buffer, so they are only safe
+// without CONFIG_HUB75_DOUBLE_BUFFER; with double buffering the back buffer
+// holds stale content and partial writes would tear.
+
+void invalidate_prev_frame() {
+  ctx.shown_valid = false;
+  ctx.back_valid = false;
+}
+
+uint8_t* alloc_frame_copy(size_t needed) {
+  uint8_t* p = static_cast<uint8_t*>(
+      heap_caps_malloc(needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!p) {
+    p = static_cast<uint8_t*>(heap_caps_malloc(needed, MALLOC_CAP_SPIRAM));
+  }
+  return p;
+}
+
+void render_frame_full(const uint8_t* frame, int canvas_w, int canvas_h) {
+#ifdef CONFIG_DISPLAY_FRAME_SYNC
+  display_draw_buffer(frame, canvas_w, canvas_h);
+  display_wait_frame(50);
+  display_flip();
+#else
+  display_draw(frame, canvas_w, canvas_h);
+#endif
+}
+
+void render_frame_diffed(const uint8_t* frame, int canvas_w, int canvas_h) {
+  const size_t row_bytes = static_cast<size_t>(canvas_w) * 4;
+  const size_t needed = row_bytes * canvas_h;
+
+  if (!ctx.shown_frame || ctx.prev_w != canvas_w || ctx.prev_h != canvas_h) {
+    heap_caps_free(ctx.shown_frame);
+    ctx.shown_frame = alloc_frame_copy(needed);
+    ctx.shown_valid = false;
+#if CONFIG_HUB75_DOUBLE_BUFFER
+    heap_caps_free(ctx.back_frame);
+    ctx.back_frame = alloc_frame_copy(needed);
+    ctx.back_valid = false;
+#endif
+    ctx.prev_w = canvas_w;
+    ctx.prev_h = canvas_h;
+  }
+
+  // Identical frame: leave the panel untouched (no draw, no flip).
+  if (ctx.shown_frame && ctx.shown_valid &&
+      memcmp(frame, ctx.shown_frame, needed) == 0) {
+    return;
+  }
+
+  // Span writes land in the buffer that becomes visible next, so they must
+  // diff against that buffer's current content: the back copy under double
+  // buffering, the shown copy when drawing into the live buffer.
+#if CONFIG_HUB75_DOUBLE_BUFFER
+  uint8_t* ref = ctx.back_frame;
+  const bool ref_valid = ctx.back_valid;
+#else
+  uint8_t* ref = ctx.shown_frame;
+  const bool ref_valid = ctx.shown_valid;
+#endif
+
+  if (ref && ref_valid && display_span_supported(canvas_w, canvas_h)) {
+    int dirty_rows = 0;
+    for (int y = 0; y < canvas_h; y++) {
+      if (memcmp(frame + y * row_bytes, ref + y * row_bytes, row_bytes) != 0) {
+        dirty_rows++;
+      }
+    }
+
+    if (dirty_rows <= (canvas_h * 3) / 4) {
+      for (int y = 0; y < canvas_h; y++) {
+        const uint32_t* cur =
+            reinterpret_cast<const uint32_t*>(frame + y * row_bytes);
+        uint32_t* prev = reinterpret_cast<uint32_t*>(ref + y * row_bytes);
+        if (memcmp(cur, prev, row_bytes) == 0) {
+          continue;
+        }
+        int first = 0;
+        while (cur[first] == prev[first]) first++;
+        int last = canvas_w - 1;
+        while (cur[last] == prev[last]) last--;
+        const int span = last - first + 1;
+        display_draw_span(reinterpret_cast<const uint8_t*>(cur + first), first,
+                          y, span, canvas_w, canvas_h);
+        memcpy(prev + first, cur + first, static_cast<size_t>(span) * 4);
+      }
+#if CONFIG_HUB75_DOUBLE_BUFFER
+#ifdef CONFIG_DISPLAY_FRAME_SYNC
+      display_wait_frame(50);
+#endif
+      display_flip();
+      // The buffer just written is now visible; the old shown content became
+      // the back buffer. Swap the copies to match.
+      uint8_t* tmp = ctx.shown_frame;
+      ctx.shown_frame = ctx.back_frame;
+      ctx.back_frame = tmp;
+      ctx.back_valid = ctx.shown_valid;
+      ctx.shown_valid = true;
+#endif
+      return;
+    }
+  }
+
+  render_frame_full(frame, canvas_w, canvas_h);
+#if CONFIG_HUB75_DOUBLE_BUFFER
+  // Full render flipped: the old shown content is now the back buffer.
+  uint8_t* tmp = ctx.shown_frame;
+  ctx.shown_frame = ctx.back_frame;
+  ctx.back_frame = tmp;
+  ctx.back_valid = ctx.shown_valid;
+#endif
+  if (ctx.shown_frame) {
+    memcpy(ctx.shown_frame, frame, needed);
+    ctx.shown_valid = true;
+  } else {
+    ctx.shown_valid = false;
+  }
+}
 
 //------------------------------------------------------------------------------
 // Static Asset Detection
@@ -145,6 +283,16 @@ void destroy_decoder() {
     heap_caps_free(ctx.frame_buf);
     ctx.frame_buf = nullptr;
   }
+  if (ctx.shown_frame) {
+    heap_caps_free(ctx.shown_frame);
+    ctx.shown_frame = nullptr;
+  }
+  if (ctx.back_frame) {
+    heap_caps_free(ctx.back_frame);
+    ctx.back_frame = nullptr;
+  }
+  ctx.shown_valid = false;
+  ctx.back_valid = false;
 }
 
 bool create_decoder() {
@@ -446,16 +594,9 @@ int decode_and_render_frame() {
   // Reset error count on successful decode
   ctx.decode_error_count = 0;
 
-  // Render frame
-#ifdef CONFIG_DISPLAY_FRAME_SYNC
-  display_draw_buffer(ctx.frame_buf, ctx.decoder_info.canvas_width,
+  // Render frame, skipping unchanged content
+  render_frame_diffed(ctx.frame_buf, ctx.decoder_info.canvas_width,
                       ctx.decoder_info.canvas_height);
-  display_wait_frame(50);
-  display_flip();
-#else
-  display_draw(ctx.frame_buf, ctx.decoder_info.canvas_width,
-               ctx.decoder_info.canvas_height);
-#endif
 
   int delay_ms = static_cast<int>(ctx.decoder.get_frame_delay());
 
@@ -505,6 +646,7 @@ TickType_t calculate_wait_ticks(int delay_ms) {
 //------------------------------------------------------------------------------
 
 void display_version_info(const char* img_url) {
+  invalidate_prev_frame();
   display_clear();
   char version_text[32];
   snprintf(version_text, sizeof(version_text), "v%s", FIRMWARE_VERSION);
@@ -852,6 +994,7 @@ int gfx_display_asset(const char* asset_type) {
 
 void gfx_display_text(const char* text, int x, int y, uint8_t r, uint8_t g,
                       uint8_t b, int scale) {
+  invalidate_prev_frame();
   display_text(text, x, y, r, g, b, scale);
 }
 
@@ -862,6 +1005,8 @@ void gfx_stop(void) {
 }
 
 void gfx_start(void) {
+  // Other code (OTA screens, error paths) may have drawn while paused.
+  invalidate_prev_frame();
   ctx.paused.store(false);
   if (ctx.task) xTaskNotifyGive(ctx.task);
   ESP_LOGI(TAG, "Resumed");
