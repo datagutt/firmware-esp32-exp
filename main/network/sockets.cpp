@@ -16,6 +16,7 @@
 #include "messages.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 
 #include <esp_crt_bundle.h>
@@ -47,9 +48,26 @@ const char* TAG = "sockets";
 constexpr int64_t RECONNECT_DELAY_US = 5000 * 1000;  // 5 seconds
 constexpr int64_t INITIAL_CONNECT_DELAY_US = 500 * 1000;  // 0.5 seconds
 constexpr int64_t GOT_IP_CONNECT_DELAY_US = 1500 * 1000;  // 1.5 seconds
-// Socket failure escalation thresholds
+
+// Failure escalation ladder (mirrors the reference cloudlink policy).
+// A socket failure first schedules a plain reconnect. After this many
+// consecutive failed reconnect cycles we tear down the WiFi link so the
+// wifi module re-scans and re-associates (its own jittered backoff and
+// multi-network RSSI failover then take over). After this many full
+// WiFi-reset cycles still without a live session, the device restarts as a
+// last resort. Counters reset to zero on a successful connection.
 constexpr int MAX_SOCK_FAILURES_BEFORE_WIFI_RESET = 5;
 constexpr int MAX_WIFI_RESETS_BEFORE_RESTART = 3;
+
+// Bounded outbox: messages produced while the socket is down are copied onto
+// a fixed FIFO ring and flushed in order once the link is ready. On overflow
+// the OLDEST entry is dropped (a display device favours the newest state).
+// Depth is a compile-time bound so the queue can never grow unbounded on a
+// long outage.
+constexpr size_t OUTBOX_DEPTH = 12;
+// Per-message send budget when draining the outbox. Kept short so a flush
+// triggered from the WS event task cannot stall it for long.
+constexpr TickType_t OUTBOX_FLUSH_TIMEOUT = pdMS_TO_TICKS(2000);
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -75,12 +93,25 @@ SemaphoreHandle_t client_mutex = nullptr;
 int sock_failure_count = 0;
 int wifi_disconnect_count = 0;
 
+// Bounded FIFO outbox. Each occupied slot owns a heap copy of the message.
+// Guarded by its own mutex (never nested with client_mutex: a flush pops
+// under outbox_mutex, releases it, then sends under client_mutex).
+struct OutboxSlot {
+  char* data = nullptr;
+  size_t len = 0;
+};
+OutboxSlot outbox[OUTBOX_DEPTH];
+size_t outbox_head = 0;   // index of the oldest queued message
+size_t outbox_count = 0;  // number of occupied slots
+SemaphoreHandle_t outbox_mutex = nullptr;
+
 // Timers
 esp_timer_handle_t reconnect_timer = nullptr;
 
 // Forward declarations
 esp_err_t start_client_locked();
 void schedule_reconnect();
+void outbox_flush();
 
 // ---------------------------------------------------------------------------
 // Reconnection (timer-based, no blocking loop)
@@ -133,6 +164,89 @@ void schedule_reconnect() {
 }
 
 // ---------------------------------------------------------------------------
+// Bounded outbox
+// ---------------------------------------------------------------------------
+
+// Send a text frame on the live client. Returns true only if the whole frame
+// was handed to the socket. Takes client_mutex; must NOT be called while
+// holding outbox_mutex.
+bool ws_send_now(const char* data, size_t len, TickType_t timeout) {
+  raii::MutexGuard lock(client_mutex, timeout);
+  if (!lock || !ctx.client) return false;
+  if (!esp_websocket_client_is_connected(ctx.client)) return false;
+  int sent = esp_websocket_client_send_text(ctx.client, data,
+                                             static_cast<int>(len), timeout);
+  return sent >= 0;
+}
+
+bool ws_is_connected_now() {
+  raii::MutexGuard lock(client_mutex);
+  return lock && ctx.client &&
+         esp_websocket_client_is_connected(ctx.client);
+}
+
+bool outbox_is_empty() {
+  raii::MutexGuard lock(outbox_mutex);
+  return !lock || outbox_count == 0;
+}
+
+// Take ownership of `copy` (heap-allocated, `len` bytes) and append it. On a
+// full ring the oldest entry is freed and dropped to make room. Frees `copy`
+// itself if the mutex cannot be taken so no message ever leaks.
+void outbox_enqueue(char* copy, size_t len) {
+  raii::MutexGuard lock(outbox_mutex);
+  if (!lock) {
+    free(copy);
+    return;
+  }
+  if (outbox_count == OUTBOX_DEPTH) {
+    free(outbox[outbox_head].data);
+    outbox[outbox_head].data = nullptr;
+    outbox_head = (outbox_head + 1) % OUTBOX_DEPTH;
+    outbox_count--;
+    ESP_LOGW(TAG, "Outbox full, dropping oldest queued message");
+  }
+  size_t idx = (outbox_head + outbox_count) % OUTBOX_DEPTH;
+  outbox[idx].data = copy;
+  outbox[idx].len = len;
+  outbox_count++;
+}
+
+// Pop the oldest entry into `out` (caller then owns out->data). Returns false
+// when the ring is empty.
+bool outbox_dequeue(OutboxSlot* out) {
+  raii::MutexGuard lock(outbox_mutex);
+  if (!lock || outbox_count == 0) return false;
+  *out = outbox[outbox_head];
+  outbox[outbox_head].data = nullptr;
+  outbox_head = (outbox_head + 1) % OUTBOX_DEPTH;
+  outbox_count--;
+  return true;
+}
+
+// Drain queued messages in FIFO order while the socket keeps accepting them.
+// Returns early (leaving the queue intact) when the link is down, so a send
+// attempted while disconnected does not silently discard the backlog. If the
+// link drops mid-drain the in-flight message is lost and the rest stay queued
+// for the next connection.
+void outbox_flush() {
+  if (!ws_is_connected_now()) return;
+  OutboxSlot slot;
+  while (outbox_dequeue(&slot)) {
+    bool ok = slot.data && ws_send_now(slot.data, slot.len,
+                                        OUTBOX_FLUSH_TIMEOUT);
+    free(slot.data);
+    if (!ok) break;
+  }
+}
+
+// Free every queued message. Used on deinit.
+void outbox_drain_free() {
+  OutboxSlot slot;
+  while (outbox_dequeue(&slot)) free(slot.data);
+}
+
+// ---------------------------------------------------------------------------
 // Failure escalation (called from ws_event_handler on WS task)
 // ---------------------------------------------------------------------------
 
@@ -182,6 +296,8 @@ void ws_event_handler(void*, esp_event_base_t, int32_t event_id,
       ctx.sent_client_info = false;
       msg_send_client_info();
       ctx.sent_client_info = true;
+      // Drain anything queued while the link was down, in order.
+      outbox_flush();
       event_bus_emit_simple(TRONBYT_EVENT_WS_CONNECTED);
       app_state_set_connectivity(CONNECTIVITY_SERVER_ONLINE);
       scheduler_on_ws_connect();
@@ -340,6 +456,13 @@ void sockets_init(const char* url) {
     ESP_LOGE(TAG, "Failed to create client mutex");
     return;
   }
+  outbox_mutex = xSemaphoreCreateMutex();
+  if (!outbox_mutex) {
+    ESP_LOGE(TAG, "Failed to create outbox mutex");
+    vSemaphoreDelete(client_mutex);
+    client_mutex = nullptr;
+    return;
+  }
 
   handlers_init();
   ctx.url = strdup(url);
@@ -407,6 +530,13 @@ void sockets_deinit() {
 
   ctx.state.store(State::Disconnected);
 
+  // Free any messages still queued, then drop the outbox mutex.
+  outbox_drain_free();
+  if (outbox_mutex) {
+    vSemaphoreDelete(outbox_mutex);
+    outbox_mutex = nullptr;
+  }
+
   handlers_deinit();
 
   if (client_mutex) {
@@ -422,10 +552,26 @@ bool sockets_is_connected() {
 }
 
 int sockets_send_text(const char* data, size_t len, TickType_t timeout) {
-  raii::MutexGuard lock(client_mutex, timeout);
-  if (!lock || !ctx.client) return -1;
-  if (!esp_websocket_client_is_connected(ctx.client)) return -1;
-  // The send is bounded by `timeout`; the reconnect timer will block on
-  // the mutex for this long before swapping the handle. Acceptable.
-  return esp_websocket_client_send_text(ctx.client, data, len, timeout);
+  if (!data || len == 0) return -1;
+
+  // Fast path: nothing queued and the link is up, so send inline. This keeps
+  // latency low and honours the caller's timeout. The send is bounded by
+  // `timeout`; the reconnect timer blocks on the mutex for at most this long
+  // before swapping the handle. Acceptable.
+  if (outbox_is_empty() && ws_send_now(data, len, timeout)) {
+    return static_cast<int>(len);
+  }
+
+  // Link down, mutex busy, or messages already queued ahead of this one:
+  // copy onto the outbox so it is delivered in order once the link is ready.
+  // The message is accepted (returns len) even though delivery is deferred.
+  char* copy = static_cast<char*>(malloc(len));
+  if (!copy) {
+    ESP_LOGE(TAG, "Failed to alloc %u bytes for outbox", (unsigned)len);
+    return -1;
+  }
+  memcpy(copy, data, len);
+  outbox_enqueue(copy, len);
+  outbox_flush();
+  return static_cast<int>(len);
 }
