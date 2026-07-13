@@ -7,6 +7,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "mdns_service.h"
 #include "nvs_settings.h"
 #include "sockets.h"
 #include "version.h"
@@ -45,6 +46,7 @@ esp_err_t msg_send_client_info_now() {
 
   cJSON_AddStringToObject(ci, "firmware_version", FIRMWARE_VERSION);
   cJSON_AddStringToObject(ci, "firmware_type", "ESP32");
+  cJSON_AddStringToObject(ci, "board", mdns_board_model());
   cJSON_AddNumberToObject(ci, "protocol_version", WEBSOCKET_PROTOCOL_VERSION);
 
   if (wifi_get_mac(mac) == 0) {

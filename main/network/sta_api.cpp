@@ -78,6 +78,7 @@ esp_err_t status_handler(httpd_req_t* req) {
   }
 
   cJSON_AddStringToObject(root, "firmware_version", FIRMWARE_VERSION);
+  cJSON_AddStringToObject(root, "board", mdns_board_model());
 
   uint8_t mac[6];
   if (wifi_get_mac(mac) == 0) {
