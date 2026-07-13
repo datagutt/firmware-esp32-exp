@@ -1,0 +1,76 @@
+test/host/test_unit.cpp
+  s_a92a4ecce435bb::t_bbdca2210d83fe 155-215,222
+  s_a92a4ecce435bb::t_e3d352c0d2a97c 8
+main/scheduler/scheduler.cpp
+  s_a92a4ecce435bb::t_9553866ac78579 35
+  s_a92a4ecce435bb::t_09c2d82b7021b2 633-641
+  s_a92a4ecce435bb::t_3b3ca46f75c9ed 54-57
+  s_a92a4ecce435bb::t_f3c63081aa9995 131
+  s_a92a4ecce435bb::t_c51760b46a8266 568-573
+  s_a92a4ecce435bb::t_feb42ed01bd0ad 321-330
+  s_a92a4ecce435bb::t_98fe41a7634c26 413
+  s_a92a4ecce435bb::t_30484ab284bd0d 652-653
+  s_a92a4ecce435bb::t_3bb11b60835caa 392-402
+  s_a92a4ecce435bb::t_1809e9a9c38a72 619-632,642-651,654-671
+  s_a92a4ecce435bb::t_2716f12aaccc94 527-536
+  s_a92a4ecce435bb::t_467914376aabe3 508-510
+  s_a92a4ecce435bb::t_08245bb3d7e6de 672
+main/system/ntp.cpp
+  s_a92a4ecce435bb::t_b167ca1783e9f5 232-235
+main/system/quiet_hours.cpp
+  s_a92a4ecce435bb::t_ad92f2ce8290dc 95,111,113-116
+  s_a92a4ecce435bb::t_dea8bdfb7d7d38 1-40,44-94,96-110,112,117-127,133-290
+  s_a92a4ecce435bb::t_4df1f8bd93600a 41-43
+  s_a92a4ecce435bb::t_bb1fbd4f8b0798 128-132
+main/network/handlers.cpp
+  s_a92a4ecce435bb::t_a5bfa13e975ae1 21
+  s_a92a4ecce435bb::t_8c0b5fe7924f64 422-434
+  s_a92a4ecce435bb::t_ee94bf21b96223 202-203
+  s_a92a4ecce435bb::t_a5d437da101c34 554-557
+main/scheduler/scheduler.h
+  s_a92a4ecce435bb::t_5180db3fced5ac 17-24
+test/host/CMakeLists.txt
+  s_a92a4ecce435bb::t_907c2c28d6f564 11
+main/system/event_bus.h
+  s_a92a4ecce435bb::t_f4d0d9d716998a 32
+main/network/sta_api.cpp
+  s_a92a4ecce435bb::t_833d23c1bd6b5f 647-661
+  s_a92a4ecce435bb::t_a66258673e18c9 498-553
+  s_a92a4ecce435bb::t_ce212dc1ed01b8 123
+  s_a92a4ecce435bb::t_ad0275706a1986 27
+  s_a92a4ecce435bb::t_86f49d4d9eafd6 662
+main/network/remote.cpp
+  s_a92a4ecce435bb::t_fff76aa7d69e46 46
+  s_a92a4ecce435bb::t_51a62bd565d674 242
+  s_a92a4ecce435bb::t_1dc98d21e1db5e 131-133
+  s_a92a4ecce435bb::t_5b6ae41cfc1672 335-337
+  s_a92a4ecce435bb::t_8d32f797e0d5f5 18
+  s_a92a4ecce435bb::t_726636e7c34d48 273
+main/system/quiet_hours.h
+  s_a92a4ecce435bb::t_a17173d9831654 1-36,44-61
+  s_a92a4ecce435bb::t_2e7fa8af10db76 37-43
+main/startup/runtime_orchestrator.cpp
+  s_a92a4ecce435bb::t_342688a99821fb 20
+  s_a92a4ecce435bb::t_696ce25d352e38 196-198
+  s_a92a4ecce435bb::t_10760a1b1f3da7 199
+main/system/quiet_hours_eval.h
+  s_a92a4ecce435bb::t_533caba1756191 1-42
+main/system/quiet_hours_eval.cpp
+  s_a92a4ecce435bb::t_491f411deddb47 1-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "a5e6a5e5884066951704ea5ac02a37aa821c9b51",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
