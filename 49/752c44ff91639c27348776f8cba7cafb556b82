@@ -1,0 +1,31 @@
+main/network/sockets.cpp
+  s_a92a4ecce435bb::t_58a1dba7711055 533-538
+  s_a92a4ecce435bb::t_deb2eff9cc0da3 555-576
+  s_a92a4ecce435bb::t_51e4fcd92d7aa7 459-465
+  s_a92a4ecce435bb::t_d791f482e28db4 299-300
+  s_a92a4ecce435bb::t_f880134f5fdded 182-187
+  s_a92a4ecce435bb::t_79870c17cd6b61 96-107,114
+  s_a92a4ecce435bb::t_4aa3a4bf913542 51-58,62-70
+  s_a92a4ecce435bb::t_fa0ab89c9bc20d 228-231,233
+  s_a92a4ecce435bb::t_38611820425b0b 19
+  s_a92a4ecce435bb::t_4c1418c56147e7 166-181,188-227,232,234-247
+  s_a92a4ecce435bb::t_bff96554657930 71
+  s_a92a4ecce435bb::t_8b31b8974c0091 248
+  s_a92a4ecce435bb::t_35c86aeb1557f8 539
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "49752c44ff91639c27348776f8cba7cafb556b82",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
