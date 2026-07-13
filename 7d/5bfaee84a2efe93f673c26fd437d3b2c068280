@@ -1,0 +1,19 @@
+main/idf_component.yml
+  s_a92a4ecce435bb::t_7cb83acf8f000e 2-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "7d5bfaee84a2efe93f673c26fd437d3b2c068280",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
