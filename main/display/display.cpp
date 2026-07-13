@@ -252,6 +252,10 @@ int display_initialize(void) {
   mxconfig.double_buffer = false;
 #endif
 
+  // Lower drive desenses the SoC's own 2.4GHz radio less; see the Kconfig
+  // help. Default 3 preserves historical behavior, boards can override.
+  mxconfig.gpio_drive_strength = CONFIG_HUB75_GPIO_DRIVE_STRENGTH;
+
   // Clock Speed
 #if defined(CONFIG_HUB75_CLK_32MHZ)
   mxconfig.output_clock_speed = Hub75ClockSpeed::HZ_32M;
