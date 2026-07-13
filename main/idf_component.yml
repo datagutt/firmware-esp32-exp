@@ -1,5 +1,9 @@
 dependencies:
-  espressif/esp_websocket_client: 1.7.0
+  # koiosdigital fork of espressif 1.7.0: fixes cross-task TLS teardown
+  # use-after-free (senders defer transport aborts to the websocket task)
+  esp_websocket_client:
+    git: https://github.com/koiosdigital/esp_websocket_client.git
+    version: v1.7.1
   esp-hub75:
     git: https://github.com/datagutt/esp-hub75.git
     version: main
