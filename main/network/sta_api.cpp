@@ -24,6 +24,7 @@
 #include "ntp.h"
 #include "nvs_settings.h"
 #include "ota_http_upload.h"
+#include "quiet_hours.h"
 #include "version.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -119,6 +120,7 @@ esp_err_t status_handler(httpd_req_t* req) {
                           app_state_name(app_state_get()));
   cJSON_AddStringToObject(root, "connectivity",
                           connectivity_level_name(app_state_get_connectivity()));
+  cJSON_AddBoolToObject(root, "quiet_active", quiet_hours_is_active());
 
   char* json = cJSON_PrintUnformatted(root);
   cJSON_Delete(root);
@@ -493,6 +495,62 @@ esp_err_t time_zonedb_handler(httpd_req_t* req) {
   return ESP_OK;
 }
 
+esp_err_t quiet_hours_get_handler(httpd_req_t* req) {
+  cJSON* root = quiet_hours_to_json();
+  if (!root) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+    return ESP_FAIL;
+  }
+
+  char* json = cJSON_PrintUnformatted(root);
+  cJSON_Delete(root);
+  if (!json) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+    return ESP_FAIL;
+  }
+
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, json);
+  free(json);
+  return ESP_OK;
+}
+
+esp_err_t quiet_hours_put_handler(httpd_req_t* req) {
+  char content[512];
+  int ret = httpd_req_recv(req, content, sizeof(content) - 1);
+  if (ret <= 0) {
+    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+      httpd_resp_send_408(req);
+    } else {
+      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                          "receive error");
+    }
+    return ESP_FAIL;
+  }
+  content[ret] = '\0';
+
+  cJSON* json = cJSON_Parse(content);
+  if (!json) {
+    diag_event_log("WARN", "json_parse_error", -1,
+                   "quiet-hours payload parse failed");
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+    return ESP_FAIL;
+  }
+
+  char err[96] = {0};
+  bool ok = quiet_hours_apply_json(json, err, sizeof(err));
+  cJSON_Delete(json);
+  if (!ok) {
+    diag_event_log("WARN", "json_validation_error", -1, err);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
+    return ESP_FAIL;
+  }
+
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_sendstr(req, "{\"status\":\"success\"}");
+  return ESP_OK;
+}
+
 esp_err_t reboot_handler(httpd_req_t* req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_sendstr(req, "{\"status\":\"rebooting\"}");
@@ -585,6 +643,22 @@ esp_err_t sta_api_start(void) {
       .user_ctx = nullptr,
   };
   httpd_register_uri_handler(server, &zonedb_uri);
+
+  const httpd_uri_t quiet_hours_get_uri = {
+      .uri = "/api/system/quiet-hours",
+      .method = HTTP_GET,
+      .handler = quiet_hours_get_handler,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &quiet_hours_get_uri);
+
+  const httpd_uri_t quiet_hours_put_uri = {
+      .uri = "/api/system/quiet-hours",
+      .method = HTTP_PUT,
+      .handler = quiet_hours_put_handler,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &quiet_hours_put_uri);
 
   const httpd_uri_t reboot_uri = {
       .uri = "/api/system/reboot",

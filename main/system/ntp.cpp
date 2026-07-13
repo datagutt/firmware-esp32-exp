@@ -229,6 +229,10 @@ void time_sync_callback(struct timeval* tv) {
   char buf[32];
   strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", info);
   ESP_LOGI(TAG, "Time synchronized: %s", buf);
+
+  // Let time-dependent subsystems (e.g. quiet hours) re-evaluate against a
+  // now-valid wall clock instead of waiting for their own periodic tick.
+  event_bus_emit_simple(TRONBYT_EVENT_TIME_SYNCED);
 }
 
 void start_sntp() {

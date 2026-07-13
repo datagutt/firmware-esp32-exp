@@ -5,6 +5,7 @@
 #include "config_contract.h"
 #include "ota_bundle.h"
 #include "ota_url_utils.h"
+#include "quiet_hours_eval.h"
 #include "scheduler_fsm.h"
 #include "webp_frame.h"
 
@@ -151,12 +152,74 @@ static void test_webp_frame_offsets() {
   assert(webp_frame_check_offsets(0, 100, 0, 1024) == WEBP_FRAME_OK);
 }
 
+// Build a local-time tm for a given weekday (0=Sunday..6=Saturday) and clock.
+static struct tm make_local(int wday, int hour, int min) {
+  struct tm t = {};
+  t.tm_wday = wday;
+  t.tm_hour = hour;
+  t.tm_min = min;
+  return t;
+}
+
+static void test_quiet_hours() {
+  // Overnight window 22:00 -> 07:00, every day.
+  quiet_window_t overnight = {true, 22, 0, 7, 0, 0x7F};
+
+  // Evening portion on the start day.
+  struct tm t = make_local(1 /*Mon*/, 23, 30);
+  assert(quiet_window_contains(&overnight, &t));
+  // Morning portion the next day (attributed to the day it started).
+  t = make_local(2 /*Tue*/, 6, 30);
+  assert(quiet_window_contains(&overnight, &t));
+  // End is exclusive.
+  t = make_local(2 /*Tue*/, 7, 0);
+  assert(!quiet_window_contains(&overnight, &t));
+  // Midday: not quiet.
+  t = make_local(3 /*Wed*/, 12, 0);
+  assert(!quiet_window_contains(&overnight, &t));
+
+  // Day mask restricted to Friday only (bit5).
+  quiet_window_t fri = {true, 22, 0, 7, 0, (uint8_t)(1u << 5)};
+  t = make_local(5 /*Fri*/, 23, 0);
+  assert(quiet_window_contains(&fri, &t));
+  // Saturday morning is still covered: the window started Friday night.
+  t = make_local(6 /*Sat*/, 6, 0);
+  assert(quiet_window_contains(&fri, &t));
+  // Saturday night is not: Saturday is not a start day.
+  t = make_local(6 /*Sat*/, 23, 0);
+  assert(!quiet_window_contains(&fri, &t));
+
+  // Same-day window 09:00 -> 17:00.
+  quiet_window_t daytime = {true, 9, 0, 17, 0, 0x7F};
+  t = make_local(3, 12, 0);
+  assert(quiet_window_contains(&daytime, &t));
+  t = make_local(3, 8, 59);
+  assert(!quiet_window_contains(&daytime, &t));
+  t = make_local(3, 17, 0);
+  assert(!quiet_window_contains(&daytime, &t));
+
+  // Disabled and zero-length windows are never active.
+  quiet_window_t disabled = {false, 0, 0, 23, 59, 0x7F};
+  t = make_local(3, 12, 0);
+  assert(!quiet_window_contains(&disabled, &t));
+  quiet_window_t zero_len = {true, 10, 0, 10, 0, 0x7F};
+  assert(!quiet_window_contains(&zero_len, &t));
+
+  // any_active across a set: matches when any enabled window matches.
+  quiet_window_t set[2] = {disabled, daytime};
+  t = make_local(3, 12, 0);
+  assert(quiet_hours_any_active(set, 2, &t));
+  t = make_local(3, 20, 0);
+  assert(!quiet_hours_any_active(set, 2, &t));
+}
+
 int main() {
   test_ota_url_parser();
   test_config_mutation();
   test_scheduler_fsm();
   test_tbup_parser();
   test_webp_frame_offsets();
+  test_quiet_hours();
   printf("host_unit_tests: PASS\n");
   return 0;
 }

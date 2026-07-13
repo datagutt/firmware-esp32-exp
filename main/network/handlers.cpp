@@ -18,6 +18,7 @@
 #include "messages.h"
 #include "nvs_settings.h"
 #include "ota.h"
+#include "quiet_hours.h"
 #include "sdkconfig.h"
 #include "syslog.h"
 #include "webp_frame.h"
@@ -198,7 +199,8 @@ void process_text_message(const char* json_str) {
                                       "ap_mode",         "prefer_ipv6",
                                       "hostname",        "syslog_addr",
                                       "sntp_server",     "image_url",
-                                      "api_key",         "reboot"};
+                                      "api_key",         "quiet_hours",
+                                      "reboot"};
 
   char validation_err[128] = {0};
   if (!api_validate_no_unknown_keys(root, kAllowedKeys,
@@ -417,6 +419,19 @@ void process_text_message(const char* json_str) {
     settings_changed = true;
   }
 
+  // Quiet hours persists to its own NVS namespace (not the config blob), so it
+  // is applied directly rather than folded into settings_changed.
+  cJSON* quiet_item = cJSON_GetObjectItem(root, "quiet_hours");
+  if (quiet_item) {
+    char quiet_err[96] = {0};
+    if (quiet_hours_apply_json(quiet_item, quiet_err, sizeof(quiet_err))) {
+      ESP_LOGI(TAG, "Updated quiet_hours");
+    } else {
+      ESP_LOGW(TAG, "quiet_hours rejected: %s", quiet_err);
+      diag_event_log("WARN", "json_validation_error", -1, quiet_err);
+    }
+  }
+
   if (settings_changed) {
     queue_config_persist(cfg);
   }
@@ -536,6 +551,10 @@ void handle_text_message(esp_websocket_event_data_t* data) {
 }
 
 void handle_binary_message(esp_websocket_event_data_t* data) {
+  // WebSocket image pushes bypass the scheduler, so they need their own quiet
+  // hours gate: drop incoming frames while the panel is intentionally dark.
+  if (quiet_hours_is_active()) return;
+
   if (data->op_code == 2 && data->payload_offset == 0) {
     ESP_LOGI(TAG, "WS binary start: total=%d dwell=%" PRId32
                   " first_image=%d",

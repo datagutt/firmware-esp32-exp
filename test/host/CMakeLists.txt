@@ -8,6 +8,7 @@ add_executable(host_unit_tests
   test_unit.cpp
   ../../main/system/ota_url_utils.cpp
   ../../main/system/ota_bundle.cpp
+  ../../main/system/quiet_hours_eval.cpp
   ../../main/scheduler/scheduler_fsm.cpp
   ../../main/network/config_contract.cpp
   ../../main/network/webp_frame.cpp

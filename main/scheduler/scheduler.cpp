@@ -32,6 +32,7 @@
 #include <freertos/task.h>
 
 #include "display.h"
+#include "event_bus.h"
 #include "ota.h"
 #include "raii_utils.hpp"
 #include "remote.h"
@@ -50,6 +51,10 @@ namespace {
 
 constexpr int64_t PREFETCH_BEFORE_US = 2 * 1000 * 1000;  // 2 s before dwell
 constexpr int64_t RETRY_DELAY_US = 5 * 1000 * 1000;      // 5 s on error
+// While paused for quiet hours we keep polling /next (display gated) so a
+// server-driven quiet signal is observed and cleared promptly. This is the
+// poll cadence during that blanked state.
+constexpr int64_t QUIET_POLL_US = 30 * 1000 * 1000;      // 30 s while quiet
 #ifndef CONFIG_REFRESH_INTERVAL_SECONDS
 constexpr int32_t DEFAULT_REFRESH_INTERVAL = 10;
 #else
@@ -123,6 +128,7 @@ struct Context {
   Mode mode = Mode::NONE;
   State state = State::IDLE;
   bool ws_connected = false;
+  bool paused = false;  // quiet hours: ignore timer/player events, panel blank
   char* http_url = nullptr;
 
   // Timers
@@ -312,6 +318,16 @@ void http_apply_prefetch() {
     }
   }
 
+  // Quiet hours: the panel is intentionally blank. Drop the fetched image but
+  // keep polling so a server-cleared quiet signal (or new content) is seen.
+  if (ctx.paused) {
+    ctx.prefetch.clear();
+    esp_timer_stop(ctx.prefetch_timer);
+    esp_timer_start_once(ctx.prefetch_timer, QUIET_POLL_US);
+    transition_to(State::IDLE);
+    return;
+  }
+
   if (ctx.prefetch.failed) {
     ESP_LOGE(TAG, "HTTP fetch failed (status %d)", ctx.prefetch.status_code);
     draw_error_indicator_pixel();
@@ -373,7 +389,17 @@ void prefetch_timer_callback(void*) {
 
   ESP_LOGD(TAG, "Prefetch timer fired");
 
-  if (ctx.mode == Mode::HTTP && ctx.state == State::PLAYING) {
+  if (ctx.mode != Mode::HTTP) return;
+
+  if (ctx.paused) {
+    // Quiet-hours poll: fetch (display stays gated in http_apply_prefetch) so
+    // we observe when the server clears the quiet signal.
+    transition_to(State::HTTP_FETCHING);
+    http_trigger_fetch();
+    return;
+  }
+
+  if (ctx.state == State::PLAYING) {
     scheduler_state_t next = scheduler_fsm_next_state(
         SCHED_MODE_HTTP, SCHED_STATE_PLAYING, SCHED_EVT_PREFETCH_TIMER, false);
     transition_to(static_cast<State>(next));
@@ -384,6 +410,7 @@ void prefetch_timer_callback(void*) {
 void retry_timer_callback(void*) {
   raii::MutexGuard lock(ctx.mutex);
   if (!lock) return;
+  if (ctx.paused) return;
 
   ESP_LOGI(TAG, "Retry timer fired");
 
@@ -478,6 +505,9 @@ void player_event_handler(void*, esp_event_base_t, int32_t event_id,
                           void* event_data) {
   raii::MutexGuard lock(ctx.mutex);
   if (!lock) return;
+  // While paused for quiet hours the player is intentionally stopped; ignore
+  // its lifecycle events so we don't kick off a fresh fetch and relight.
+  if (ctx.paused) return;
 
   switch (event_id) {
     case GFX_PLAYER_EVT_PLAYING:
@@ -491,6 +521,16 @@ void player_event_handler(void*, esp_event_base_t, int32_t event_id,
       on_player_error(
           static_cast<const gfx_error_evt_t*>(event_data));
       break;
+  }
+}
+
+// Display-power events drive quiet hours: OFF pauses and blanks, ON resumes.
+void display_power_event_handler(const tronbyt_event_t* event, void*) {
+  if (!event) return;
+  if (event->type == TRONBYT_EVENT_DISPLAY_OFF) {
+    scheduler_pause();
+  } else if (event->type == TRONBYT_EVENT_DISPLAY_ON) {
+    scheduler_resume();
   }
 }
 
@@ -524,6 +564,12 @@ void scheduler_init() {
   // Register for player events
   esp_event_handler_register(GFX_PLAYER_EVENTS, ESP_EVENT_ANY_ID,
                              player_event_handler, nullptr);
+
+  // React to quiet-hours display-power transitions.
+  event_bus_subscribe(TRONBYT_EVENT_DISPLAY_OFF, display_power_event_handler,
+                      nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_DISPLAY_ON, display_power_event_handler,
+                      nullptr);
 
   ESP_LOGI(TAG, "Scheduler initialized");
 }
@@ -568,6 +614,60 @@ void scheduler_stop() {
   }
 
   ESP_LOGI(TAG, "Scheduler stopped");
+}
+
+void scheduler_pause() {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+  if (ctx.paused) return;
+
+  ctx.paused = true;
+  stop_timers();
+  ctx.prefetch.clear();
+
+  // Stop the render pipeline, then blank the panel. gfx_stop() halts the
+  // player task so display_clear() is not immediately overdrawn.
+  gfx_stop();
+  display_clear();
+
+  // In HTTP mode keep polling /next while blanked so a server-driven quiet
+  // signal can be observed and cleared. The fetched image is dropped in
+  // http_apply_prefetch while paused. WebSocket mode relies on the local
+  // window evaluator (server quiet is an HTTP-only header).
+  if (ctx.mode == Mode::HTTP) {
+    transition_to(State::HTTP_FETCHING);
+    http_trigger_fetch();
+  }
+
+  ESP_LOGI(TAG, "Paused for quiet hours");
+}
+
+void scheduler_resume() {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+  if (!ctx.paused) return;
+
+  ctx.paused = false;
+  gfx_start();
+  // Cancel the quiet-hours poll timer; normal playback re-arms its own timers.
+  stop_timers();
+
+  switch (ctx.mode) {
+    case Mode::HTTP:
+      // Refetch immediately so the panel repopulates without waiting a dwell.
+      transition_to(State::HTTP_FETCHING);
+      http_trigger_fetch();
+      break;
+    case Mode::WEBSOCKET:
+      // The server pushes content on its own cadence; just await the next one.
+      transition_to(State::IDLE);
+      break;
+    default:
+      transition_to(State::IDLE);
+      break;
+  }
+
+  ESP_LOGI(TAG, "Resumed from quiet hours");
 }
 
 void scheduler_on_ws_connect() {

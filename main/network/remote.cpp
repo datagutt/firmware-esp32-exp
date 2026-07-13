@@ -15,6 +15,7 @@
 #include <freertos/task.h>
 
 #include "nvs_settings.h"
+#include "quiet_hours.h"
 #include "sdkconfig.h"
 #include "version.h"
 #include "webp_player.h"
@@ -42,6 +43,7 @@ struct RemoteState {
   int32_t dwell_secs;
   char* ota_url;
   bool oversize_detected;
+  bool quiet;
 };
 
 template <typename T>
@@ -126,6 +128,9 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
           memcpy(state->ota_url, event->header_value, url_len);
         }
         ESP_LOGI(TAG, "Found OTA URL: %s", state->ota_url);
+      } else if (strcasecmp(event->header_key, "Tronbyt-Quiet") == 0) {
+        state->quiet = atoi(event->header_value) != 0;
+        ESP_LOGD(TAG, "Tronbyt-Quiet value: %d", state->quiet);
       }
       break;
 
@@ -234,6 +239,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       .dwell_secs = -1,
       .ota_url = nullptr,
       .oversize_detected = false,
+      .quiet = false,
   };
 
   if (!state.buf) {
@@ -264,6 +270,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       if (state.ota_url) { free(state.ota_url); state.ota_url = nullptr; }
       state.brightness  = 255;
       state.dwell_secs  = -1;
+      state.quiet       = false;
 
       // A previous attempt's callback may have freed the buffer on an OOM/
       // realloc failure (sets buf to nullptr). Re-allocate so this attempt
@@ -325,6 +332,9 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
     *return_status_code   = status_code;
 
     if (status_code == 200) {               // success: transfer buffer ownership
+      // Feed the server quiet signal into the OR-combined quiet-hours engine.
+      // Only trust it on a real response, so transient errors do not flip state.
+      quiet_hours_set_remote_active(state.quiet);
       *buf           = static_cast<uint8_t*>(state.buf);
       *len           = state.len;
       *brightness_pct = state.brightness;

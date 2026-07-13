@@ -17,6 +17,7 @@
 #include "heap_monitor.h"
 #include "ntp.h"
 #include "nvs_settings.h"
+#include "quiet_hours.h"
 #include "scheduler.h"
 #include "sockets.h"
 #include "sta_api.h"
@@ -191,6 +192,10 @@ void runtime_task(void*) {
     ESP_LOGI(TAG, "Using HTTP polling with URL: %s", image_url);
     scheduler_start_http(image_url);
   }
+
+  // Start quiet hours after the scheduler is live so its initial evaluation can
+  // pause playback immediately if the device booted inside a quiet window.
+  quiet_hours_init();
 
   ESP_LOGI(TAG, "Runtime setup complete — deleting runtime task");
   vTaskDelete(nullptr);
