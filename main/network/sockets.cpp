@@ -348,6 +348,9 @@ esp_err_t start_client_locked() {
   esp_websocket_client_config_t ws_cfg = {};
   ws_cfg.uri = ctx.url;
   ws_cfg.buffer_size = 4096;
+  // Message handlers and JSON parsing run in this task's event callbacks,
+  // which overflows the component's 4096 default.
+  ws_cfg.task_stack = CONFIG_WS_TASK_STACK_SIZE;
   ws_cfg.crt_bundle_attach = esp_crt_bundle_attach;
   ws_cfg.reconnect_timeout_ms = 10000;
   ws_cfg.network_timeout_ms = 10000;

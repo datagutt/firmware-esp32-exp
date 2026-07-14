@@ -75,6 +75,14 @@ menu "Application Configuration"
         help
             Default size of the HTTP buffer.
 
+    config WS_TASK_STACK_SIZE
+        int "WebSocket client task stack size"
+        default 6144
+        help
+            Stack size for the esp_websocket_client task. Message handlers
+            and JSON parsing run in this task's event callbacks, so it needs
+            headroom beyond the component default of 4096.
+
     choice BOOT_ANIMATION
         prompt "Boot Animation"
         default BOOT_WEBP_TRONBYT
