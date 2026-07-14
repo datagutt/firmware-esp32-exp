@@ -359,6 +359,23 @@ void http_apply_prefetch() {
     return;
   }
 
+  // Successful fetch with no renderable payload: the server has nothing to
+  // show. Feeding empty bytes to the decoder would error out and drop us into a
+  // retry loop over a stale frame, so treat it like a 304 and keep polling at
+  // the returned dwell instead.
+  if (ctx.prefetch.webp == nullptr || ctx.prefetch.len == 0) {
+    ESP_LOGW(TAG, "HTTP fetch returned empty content; keeping current frame");
+    display_set_brightness(ctx.prefetch.brightness_pct);
+    ctx.brightness_pct = ctx.prefetch.brightness_pct;
+    int32_t dwell = ctx.prefetch.dwell_secs;
+    if (dwell <= 0) dwell = DEFAULT_REFRESH_INTERVAL;
+    dwell = effective_dwell_for_brightness(ctx.prefetch.brightness_pct, dwell);
+    ctx.prefetch.clear();
+    transition_to(State::PLAYING);
+    start_prefetch_timer(dwell);
+    return;
+  }
+
   // Apply brightness and queue image
   display_set_brightness(ctx.prefetch.brightness_pct);
   ctx.brightness_pct = ctx.prefetch.brightness_pct;
