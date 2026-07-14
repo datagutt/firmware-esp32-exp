@@ -15,6 +15,7 @@
 
 #include "embedded_tz_db.h"
 #include "event_bus.h"
+#include "http_slot.h"
 
 namespace {
 
@@ -147,6 +148,19 @@ bool fetch_timezone_from_api() {
   cfg.event_handler = tz_http_event_handler;
   cfg.user_data = &response;
   cfg.timeout_ms = 5000;
+
+  // This fetch runs at boot, concurrently with the scheduler's first (TLS)
+  // image fetch, exactly when the internal heap is tightest. Serialize it
+  // behind the shared slot so it does not add a second concurrent connection
+  // during that window. It is plain HTTP today, but the slot also future-proofs
+  // a switch to an HTTPS geolocation endpoint. On contention just skip; the
+  // caller's retry loop tries again shortly.
+  constexpr uint32_t kTzSlotWaitMs = 8000;
+  http_slot::Guard slot("ntp_tz", kTzSlotWaitMs);
+  if (!slot) {
+    ESP_LOGW(TAG, "HTTP slot busy, deferring TZ fetch");
+    return false;
+  }
 
   esp_http_client_handle_t client = esp_http_client_init(&cfg);
   if (!client) {

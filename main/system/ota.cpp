@@ -21,6 +21,7 @@
 #include "display.h"
 #include "diag_event_ring.h"
 #include "event_bus.h"
+#include "http_slot.h"
 #include "ota_url_utils.h"
 #include "webp_player.h"
 
@@ -220,6 +221,28 @@ void run_ota(const char* url) {
 
   display_clear();
   display_text("OTA Update", 2, 10, 0, 0, 255, 1);
+
+  // Hold the shared TLS slot for the whole download so the update's handshake
+  // (and its retries) never collide with another client's. s_ota_in_progress
+  // is already set above, so the poll path yields the slot to us on sight; the
+  // only wait we can incur is a single in-flight image fetch draining, hence
+  // the generous timeout (longer than remote_get's per-attempt HTTP timeout).
+  constexpr uint32_t kOtaSlotWaitMs = 30000;
+  http_slot::Guard slot("ota", kOtaSlotWaitMs);
+  if (!slot) {
+    ESP_LOGE(TAG, "Could not acquire HTTP slot for OTA; aborting update");
+    diag_event_log("ERROR", "ota_slot_busy", -1,
+                   "OTA aborted: shared HTTP slot stayed busy");
+    app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
+    app_state_enter_normal();
+    display_clear();
+    display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
+    display_flip();
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    s_ota_in_progress.store(false);
+    gfx_start();
+    return;
+  }
 
   // A transfer can drop mid-stream (transient TLS/transport errors, a proxy
   // closing the connection). Retry the download in place so a brief glitch

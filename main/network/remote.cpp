@@ -14,7 +14,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "http_slot.h"
 #include "nvs_settings.h"
+#include "ota.h"
 #include "quiet_hours.h"
 #include "sdkconfig.h"
 #include "version.h"
@@ -26,6 +28,11 @@ const char* TAG = "remote";
 
 constexpr int      REMOTE_MAX_ATTEMPTS  = 3;
 constexpr uint32_t REMOTE_BACKOFF_MS[]  = {0, 500, 1500};
+
+// How long a poll waits for the shared TLS slot before giving up. Kept short:
+// the only real contender is an OTA download, and rather than block a whole
+// poll on it the scheduler simply retries on its next interval.
+constexpr uint32_t REMOTE_SLOT_WAIT_MS = 5000;
 
 // Retry connection errors and these "try again later" status codes only.
 bool http_status_is_transient(int status) {
@@ -270,6 +277,15 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
   // Read auth config once; API key is stable for the lifetime of this call.
   auto cfg = config_get();
 
+  // Yield to OTA: an update holds the shared TLS slot for its whole download,
+  // so there is no point contending. Skip this poll cycle entirely; the
+  // scheduler retries on its next interval once the update finishes.
+  if (ota_in_progress()) {
+    ESP_LOGI(TAG, "OTA in progress, skipping image fetch");
+    free(state.buf);
+    return 1;
+  }
+
   for (int attempt = 0; attempt < REMOTE_MAX_ATTEMPTS; ++attempt) {
     if (attempt > 0) {
       uint32_t base   = REMOTE_BACKOFF_MS[attempt];
@@ -299,6 +315,19 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
           return 1;
         }
       }
+    }
+
+    // Hold the shared TLS slot across connect + transfer so this handshake
+    // cannot collide with another client's. The guard releases at the end of
+    // each loop iteration (before the next attempt's backoff) and on every
+    // return below, always after esp_http_client_cleanup has freed the socket.
+    http_slot::Guard slot("remote", REMOTE_SLOT_WAIT_MS);
+    if (!slot) {
+      // Slot stayed busy (an OTA download is likely running). Do not spin
+      // through the remaining attempts; bail to the exhausted-attempts cleanup
+      // below and let the scheduler retry on its next interval.
+      ESP_LOGW(TAG, "HTTP slot busy, skipping fetch");
+      break;
     }
 
     esp_http_client_handle_t http = esp_http_client_init(&config);
