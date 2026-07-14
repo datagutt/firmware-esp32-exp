@@ -24,7 +24,9 @@ constexpr const char* NVS_NAMESPACE = "ntp_cfg";
 // Timezone fetch from IP geolocation API
 constexpr const char* TZ_FETCH_URL = "http://ip-api.com/json";
 constexpr size_t TZ_RESPONSE_BUFFER_SIZE = 512;
-constexpr size_t TZ_FETCH_TASK_STACK = 4096;
+// 8192: the fetch runs esp_http_client plus JSON parsing in this task and
+// 4096 overflowed in the field (see kd_common 040f31d).
+constexpr size_t TZ_FETCH_TASK_STACK = 8192;
 constexpr int TZ_FETCH_TASK_PRIORITY = 5;
 constexpr int TZ_FETCH_MAX_RETRIES = 2;
 constexpr int TZ_FETCH_RETRY_DELAY_MS = 3000;
