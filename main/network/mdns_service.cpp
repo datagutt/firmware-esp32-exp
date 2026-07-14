@@ -7,6 +7,7 @@
 #include "event_bus.h"
 #include "nvs_settings.h"
 #include "sdkconfig.h"
+#include "wifi.h"
 
 const char* mdns_board_model() {
 #if defined(CONFIG_BOARD_TIDBYT_GEN1)
@@ -46,13 +47,23 @@ void start_mdns() {
 
   const esp_app_desc_t* app = esp_app_get_description();
 
+  // Stable device id (STA MAC as hex) so the server and tooling can identify
+  // devices on the LAN before any connection is made.
+  char device_id[13] = "unknown";
+  uint8_t mac[6];
+  if (wifi_get_mac(mac) == 0) {
+    snprintf(device_id, sizeof(device_id), "%02x%02x%02x%02x%02x%02x", mac[0],
+             mac[1], mac[2], mac[3], mac[4], mac[5]);
+  }
+
   mdns_txt_item_t txt[] = {
       {"model", mdns_board_model()},
       {"version", app->version},
+      {"id", device_id},
   };
 
   ret = mdns_service_add(nullptr, "_" CONFIG_BRAND_NAME_LOWER, "_tcp", 80, txt,
-                         2);
+                         3);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "mdns_service_add failed: %s", esp_err_to_name(ret));
     mdns_free();
