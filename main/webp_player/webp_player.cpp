@@ -156,10 +156,13 @@ void invalidate_prev_frame() {
 }
 
 uint8_t* alloc_frame_copy(size_t needed) {
-  uint8_t* p = static_cast<uint8_t*>(
-      heap_caps_malloc(needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  // Prefer PSRAM: the copies are only memcmp/memcpy fodder and internal RAM
+  // is scarce (TLS handshakes and task stacks need it more).
+  uint8_t* p =
+      static_cast<uint8_t*>(heap_caps_malloc(needed, MALLOC_CAP_SPIRAM));
   if (!p) {
-    p = static_cast<uint8_t*>(heap_caps_malloc(needed, MALLOC_CAP_SPIRAM));
+    p = static_cast<uint8_t*>(
+        heap_caps_malloc(needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   }
   return p;
 }
