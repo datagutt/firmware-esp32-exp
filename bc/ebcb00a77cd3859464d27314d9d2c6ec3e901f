@@ -1,0 +1,28 @@
+main/system/heap_monitor.h
+  s_a92a4ecce435bb::t_7bacc4e41e5164 7-8,14-24,37-44,49-58
+  s_a92a4ecce435bb::t_e1c02a8f428969 59
+main/system/heap_monitor.cpp
+  s_a92a4ecce435bb::t_85f51595078b50 3-8,17-23,25,37-56,62-64,78-81,91,93-96,98-100,106-108,114-117,140-162
+  s_a92a4ecce435bb::t_652f6404a98841 164-169
+  s_a92a4ecce435bb::t_a43beea317864e 163
+main/system/console.cpp
+  s_a92a4ecce435bb::t_831e381cafad41 17-18
+  s_a92a4ecce435bb::t_98f424e23ef319 26-29,36-43,45-54,59,65,102-105
+  s_a92a4ecce435bb::t_2c442764676e24 142-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "bcebcb00a77cd3859464d27314d9d2c6ec3e901f",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
