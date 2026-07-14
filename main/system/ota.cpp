@@ -219,58 +219,77 @@ void run_ota(const char* url) {
   display_clear();
   display_text("OTA Update", 2, 10, 0, 0, 255, 1);
 
-  esp_https_ota_handle_t https_ota_handle = nullptr;
-  esp_err_t err = esp_https_ota_begin(&ota_config, &https_ota_handle);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed: %s", esp_err_to_name(err));
-    diag_event_log("ERROR", "ota_begin_fail", err, esp_err_to_name(err));
-    app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
-    app_state_enter_normal();
-    display_clear();
-    display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
-    display_flip();
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    s_ota_in_progress.store(false);
-    gfx_start();
-    return;
-  }
+  // A transfer can drop mid-stream (transient TLS/transport errors, a proxy
+  // closing the connection). Retry the download in place so a brief glitch
+  // does not fail the whole update until the next push. Validation failures
+  // are deterministic (wrong artifact), so retrying those only burns a flash
+  // erase cycle. esp_https_ota_begin re-erases the target partition, so each
+  // retry starts from a clean slate.
+  constexpr int kOtaDownloadAttempts = 3;
+  constexpr int kOtaDownloadRetryMs = 15000;
 
   int bar_x = 2;
   int bar_y = 20;
   int bar_w = 60;
   int bar_h = 4;
-  int last_progress_width = -1;
 
-  while (true) {
-    err = esp_https_ota_perform(https_ota_handle);
-    if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+  esp_https_ota_handle_t https_ota_handle = nullptr;
+  esp_err_t err = ESP_FAIL;
+  for (int attempt = 1; attempt <= kOtaDownloadAttempts; attempt++) {
+    https_ota_handle = nullptr;
+    err = esp_https_ota_begin(&ota_config, &https_ota_handle);
+    if (err == ESP_OK) {
+      int last_progress_width = -1;
+      while (true) {
+        err = esp_https_ota_perform(https_ota_handle);
+        if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+          break;
+        }
+
+        int cur_len = esp_https_ota_get_image_len_read(https_ota_handle);
+        int total_len = esp_https_ota_get_image_size(https_ota_handle);
+
+        if (total_len > 0) {
+          int progress_width = (cur_len * bar_w) / total_len;
+
+          if (progress_width != last_progress_width) {
+            display_fill_rect(bar_x, bar_y, bar_w, bar_h, 10, 10, 10);
+            if (progress_width > 0) {
+              display_fill_rect(bar_x, bar_y, progress_width, bar_h, 0,
+                                255, 0);
+            }
+            display_flip();
+            last_progress_width = progress_width;
+          }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+
+      if (err == ESP_OK) {
+        break;
+      }
+      esp_https_ota_abort(https_ota_handle);
+      https_ota_handle = nullptr;
+    } else {
+      ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed: %s", esp_err_to_name(err));
+    }
+
+    if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
       break;
     }
-
-    int cur_len = esp_https_ota_get_image_len_read(https_ota_handle);
-    int total_len = esp_https_ota_get_image_size(https_ota_handle);
-
-    if (total_len > 0) {
-      int progress_width = (cur_len * bar_w) / total_len;
-
-      if (progress_width != last_progress_width) {
-        display_fill_rect(bar_x, bar_y, bar_w, bar_h, 10, 10, 10);
-        if (progress_width > 0) {
-          display_fill_rect(bar_x, bar_y, progress_width, bar_h, 0,
-                            255, 0);
-        }
-        display_flip();
-        last_progress_width = progress_width;
-      }
+    if (attempt < kOtaDownloadAttempts) {
+      ESP_LOGW(TAG, "OTA download attempt %d/%d failed (%s), retrying in %d ms",
+               attempt, kOtaDownloadAttempts, esp_err_to_name(err),
+               kOtaDownloadRetryMs);
+      diag_event_log("WARN", "ota_retry", err, esp_err_to_name(err));
+      vTaskDelay(pdMS_TO_TICKS(kOtaDownloadRetryMs));
     }
-
-    vTaskDelay(pdMS_TO_TICKS(10));
   }
 
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "OTA Update failed: %s", esp_err_to_name(err));
     diag_event_log("ERROR", "ota_perform_fail", err, esp_err_to_name(err));
-    esp_https_ota_finish(https_ota_handle);
     app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
     app_state_enter_normal();
     display_clear();
