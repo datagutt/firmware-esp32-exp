@@ -14,6 +14,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "heap_monitor.h"
+
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
 #include <driver/usb_serial_jtag.h>
 #include <driver/usb_serial_jtag_vfs.h>
@@ -21,32 +23,46 @@
 
 namespace {
 
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+void print_task_table();
+#endif
+
 int cmd_free(int argc, char** argv) {
   printf("internal: %" PRIu32 " total: %" PRIu32 "\n",
          esp_get_free_internal_heap_size(), esp_get_free_heap_size());
   return 0;
 }
 
-int cmd_heap(int argc, char** argv) {
-  uint32_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-  uint32_t free_external = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-  uint32_t min_internal =
-      heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+void print_heap_region(const char* name, uint32_t caps) {
+  size_t free_bytes = heap_caps_get_free_size(caps);
+  size_t min_free = heap_caps_get_minimum_free_size(caps);
+  size_t largest = heap_caps_get_largest_free_block(caps);
+  printf("%-9s %-10zu %-10zu %-10zu %u%%\n", name, free_bytes, min_free,
+         largest, heap_monitor_fragmentation_pct(free_bytes, largest));
+}
 
-  printf("free_internal: %" PRIu32 "\n", free_internal);
-  printf("free_external: %" PRIu32 "\n", free_external);
-  printf("internal_watermark: %" PRIu32 "\n", min_internal);
+int cmd_heap(int argc, char** argv) {
+  printf("%-9s %-10s %-10s %-10s %s\n", "region", "free", "min", "largest",
+         "frag");
+  print_heap_region("internal", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  print_heap_region("dma", MALLOC_CAP_DMA);
+  print_heap_region("spiram", MALLOC_CAP_SPIRAM);
+
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+  printf("\n");
+  print_task_table();
+#endif
   return 0;
 }
 
 #if CONFIG_FREERTOS_USE_TRACE_FACILITY
-int cmd_task_dump(int argc, char** argv) {
+void print_task_table() {
   UBaseType_t num_tasks = uxTaskGetNumberOfTasks();
   auto* task_array = static_cast<TaskStatus_t*>(
       malloc(num_tasks * sizeof(TaskStatus_t)));
   if (!task_array) {
     printf("error: failed to allocate task array\n");
-    return 1;
+    return;
   }
 
   uint32_t total_runtime;
@@ -83,6 +99,10 @@ int cmd_task_dump(int argc, char** argv) {
   }
 
   free(task_array);
+}
+
+int cmd_task_dump(int argc, char** argv) {
+  print_task_table();
   return 0;
 }
 #endif
@@ -119,7 +139,9 @@ void register_commands() {
        .func_w_context = nullptr,
        .context = nullptr},
       {.command = "heap",
-       .help = "Get heap statistics (internal, external, watermark)",
+       .help =
+           "Per-region heap breakdown (free/min/largest/frag) plus task "
+           "stacks",
        .hint = nullptr,
        .func = &cmd_heap,
        .argtable = nullptr,

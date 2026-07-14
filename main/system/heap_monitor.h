@@ -46,5 +46,16 @@ size_t heap_monitor_get_trend(heap_trend_point_t* out, size_t max_points);
 /** Run heap integrity check; returns true if OK. */
 bool heap_monitor_check_integrity(const char* location);
 
+/**
+ * Fragmentation percentage (0-100) for a heap region.
+ *
+ * Reports how much of the free space is unavailable as a single contiguous
+ * block: 0 means the largest free block equals total free (an allocation can
+ * use all of it), higher values mean the free space is split into smaller
+ * pieces. A region with lots of free bytes but a high fragmentation percentage
+ * can still fail a large allocation. Pure function, safe to unit test on host.
+ */
+uint8_t heap_monitor_fragmentation_pct(size_t free_bytes, size_t largest_block);
+
 /** Dump detailed per-region heap info to log. */
 void heap_monitor_dump_info(void);

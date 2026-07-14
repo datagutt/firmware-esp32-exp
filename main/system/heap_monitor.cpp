@@ -88,12 +88,16 @@ void heap_monitor_log_status(const char* tag) {
   ESP_LOGI(TAG, "[%s] Free heap: %lu, min ever: %lu", tag,
            static_cast<unsigned long>(esp_get_free_heap_size()),
            static_cast<unsigned long>(esp_get_minimum_free_heap_size()));
-  ESP_LOGI(TAG, "  DRAM:   free=%zu (%+ld since boot), min=%zu, blk=%zu",
+  ESP_LOGI(TAG, "  DRAM:   free=%zu (%+ld since boot), min=%zu, blk=%zu, frag=%u%%",
            now.internal_free, static_cast<long>(delta_int), now.internal_min,
-           now.internal_largest_block);
-  ESP_LOGI(TAG, "  SPIRAM: free=%zu (%+ld since boot), min=%zu, blk=%zu",
+           now.internal_largest_block,
+           heap_monitor_fragmentation_pct(now.internal_free,
+                                          now.internal_largest_block));
+  ESP_LOGI(TAG, "  SPIRAM: free=%zu (%+ld since boot), min=%zu, blk=%zu, frag=%u%%",
            now.spiram_free, static_cast<long>(delta_spi), now.spiram_min,
-           now.spiram_largest_block);
+           now.spiram_largest_block,
+           heap_monitor_fragmentation_pct(now.spiram_free,
+                                          now.spiram_largest_block));
   ESP_LOGI(TAG, "  DMA:    free=%zu", now.dma_free);
 
   heap_monitor_check_integrity(tag);
@@ -155,6 +159,13 @@ size_t heap_monitor_get_trend(heap_trend_point_t* out, size_t max_points) {
     out[i] = s_trend[idx];
   }
   return count;
+}
+
+uint8_t heap_monitor_fragmentation_pct(size_t free_bytes, size_t largest_block) {
+  if (free_bytes == 0 || largest_block >= free_bytes) {
+    return 0;
+  }
+  return static_cast<uint8_t>(((free_bytes - largest_block) * 100) / free_bytes);
 }
 
 bool heap_monitor_check_integrity(const char* location) {
