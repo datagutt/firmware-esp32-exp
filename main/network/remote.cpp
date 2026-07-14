@@ -244,6 +244,11 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
 
 }  // namespace
 
+void remote_reset_cache(void) {
+  s_etag[0] = '\0';
+  s_etag_url[0] = '\0';
+}
+
 int remote_get(const char* url, uint8_t** buf, size_t* len,
                uint8_t* brightness_pct, int32_t* dwell_secs,
                int* return_status_code, char** ota_url) {

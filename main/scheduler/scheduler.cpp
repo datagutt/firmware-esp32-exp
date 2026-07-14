@@ -668,6 +668,10 @@ void scheduler_resume() {
 
   switch (ctx.mode) {
     case Mode::HTTP:
+      // Pausing blanked the panel, so drop the conditional-GET validator: a 304
+      // would make http_apply_prefetch keep "current" content that is no longer
+      // on screen, leaving the panel blank. Forcing a full GET repaints it.
+      remote_reset_cache();
       // Refetch immediately so the panel repopulates without waiting a dwell.
       transition_to(State::HTTP_FETCHING);
       http_trigger_fetch();
