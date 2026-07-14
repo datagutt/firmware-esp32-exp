@@ -202,6 +202,8 @@ void run_ota(const char* url) {
   http_config.timeout_ms = 60000;
   http_config.keep_alive_enable = true;
   http_config.save_client_session = true;
+  // 6KB: larger reads cut per-chunk overhead across a multi-megabyte image.
+  http_config.buffer_size = 6 * 1024;
 
   esp_https_ota_config_t ota_config = {};
   ota_config.http_config = &http_config;
