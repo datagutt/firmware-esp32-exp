@@ -1,0 +1,21 @@
+.claude/skills/koios-sync/SKILL.md
+  s_a92a4ecce435bb::t_fd699ad1e57f6a 1-48
+.claude/skills/koios-sync/last-sync.json
+  s_a92a4ecce435bb::t_0d3ac25f5bed23 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "20aab887f097ef52677fbee6060bd9142161de0f",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
