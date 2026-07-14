@@ -1,0 +1,33 @@
+main/system/ota.cpp
+  s_a92a4ecce435bb::t_9d6c253c93b804 225-246
+  s_a92a4ecce435bb::t_565e53d612f75d 24
+main/system/ntp.cpp
+  s_a92a4ecce435bb::t_b619429b6d9187 18
+  s_a92a4ecce435bb::t_42094c3116f8c6 152-164
+main/network/http_slot.cpp
+  s_a92a4ecce435bb::t_d36b7407a82760 3-4
+  s_a92a4ecce435bb::t_2e76365ecdf1f8 1-2,5-66
+main/network/remote.cpp
+  s_a92a4ecce435bb::t_acea60c4da0a12 17,19
+  s_a92a4ecce435bb::t_e02503beb265ab 32-36
+  s_a92a4ecce435bb::t_b901135a9ac2a7 280-288
+  s_a92a4ecce435bb::t_37349885dd0f7b 320-332
+main/network/http_slot.h
+  s_a92a4ecce435bb::t_a3c560d7df69cc 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "505ffe71a273c3dfc03bffd1ac410691ed004ee2",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
