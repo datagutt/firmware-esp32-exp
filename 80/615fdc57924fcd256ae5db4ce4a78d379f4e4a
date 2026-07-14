@@ -1,0 +1,19 @@
+main/system/ota.cpp
+  s_a92a4ecce435bb::t_d911b3b3d82cad 222-229,236-247,249-264,266-267,269-270,272-275,278-287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "80615fdc57924fcd256ae5db4ce4a78d379f4e4a",
+  "prompts": {},
+  "sessions": {
+    "s_a92a4ecce435bb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a6bab216-8550-4dc3-9978-2748ef1f0ce4",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Thomas Lekanger <thomas.lekanger@hotmail.com>"
+    }
+  }
+}
