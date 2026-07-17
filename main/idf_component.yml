@@ -7,8 +7,9 @@ dependencies:
   esp-hub75:
     git: https://github.com/datagutt/esp-hub75.git
     # Pinned commit for reproducible builds; bump when the fork advances.
-    # ba0e60a: gpio drive strength + fused row-pair draw path + c6 fixes.
-    version: ba0e60afa64fde15bbfdf727b4bc8fa0f530df99
+    # bc063a5: internal-RAM driver allocation (on top of ba0e60a gpio drive
+    # strength + fused row-pair draw path + c6 fixes).
+    version: bc063a51cd6ec4616a9ef2ac32b35dbc36866d63
     path: components/hub75
   espressif/cjson: "*"
   espressif/mdns: "*"
