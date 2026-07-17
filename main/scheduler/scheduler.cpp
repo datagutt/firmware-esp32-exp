@@ -310,11 +310,13 @@ void http_apply_prefetch() {
     char* ota_url = ctx.prefetch.ota_url;
     ctx.prefetch.ota_url = nullptr;
     ESP_LOGI(TAG, "OTA URL received via HTTP: %s", ota_url);
-    BaseType_t ota_rc = xTaskCreatePinnedToCoreWithCaps(
-        ota_task_entry, "ota_task", 8192, ota_url, 5,
-        nullptr, tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    // OTA writes the app partition (flash cache disabled during the write), so
+    // its stack must be in internal RAM, never PSRAM.
+    BaseType_t ota_rc =
+        xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
     if (ota_rc != pdPASS) {
-      xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+      ESP_LOGE(TAG, "Failed to create OTA task; dropping request");
+      free(ota_url);  // no task will run to free it
     }
   }
 
