@@ -211,21 +211,25 @@ void render_frame_diffed(const uint8_t* frame, int canvas_w, int canvas_h) {
 #endif
 
   if (ref && ref_valid && display_span_supported(canvas_w, canvas_h)) {
+    // Single compare pass over the (PSRAM) frame copies: remember which rows
+    // differ so the span loop below does not memcmp the same rows again.
+    // display_span_supported bounds canvas_h to the panel height.
+    uint8_t row_dirty[CONFIG_HUB75_PANEL_HEIGHT];
     int dirty_rows = 0;
     for (int y = 0; y < canvas_h; y++) {
-      if (memcmp(frame + y * row_bytes, ref + y * row_bytes, row_bytes) != 0) {
-        dirty_rows++;
-      }
+      row_dirty[y] =
+          memcmp(frame + y * row_bytes, ref + y * row_bytes, row_bytes) != 0;
+      dirty_rows += row_dirty[y];
     }
 
     if (dirty_rows <= (canvas_h * 3) / 4) {
       for (int y = 0; y < canvas_h; y++) {
+        if (!row_dirty[y]) {
+          continue;
+        }
         const uint32_t* cur =
             reinterpret_cast<const uint32_t*>(frame + y * row_bytes);
         uint32_t* prev = reinterpret_cast<uint32_t*>(ref + y * row_bytes);
-        if (memcmp(cur, prev, row_bytes) == 0) {
-          continue;
-        }
         int first = 0;
         while (cur[first] == prev[first]) first++;
         int last = canvas_w - 1;
