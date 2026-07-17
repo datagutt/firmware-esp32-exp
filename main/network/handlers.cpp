@@ -77,22 +77,14 @@ bool ensure_text_mailbox_initialized() {
   }
 
   if (!s_consumer_task) {
-    BaseType_t rc = pdFAIL;
-#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
-    rc = xTaskCreatePinnedToCoreWithCaps(
-        consumer_task, "txt_handler", CONSUMER_STACK_SIZE, nullptr,
-        CONSUMER_PRIORITY, &s_consumer_task, tskNO_AFFINITY,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (rc != pdPASS) {
-      ESP_LOGW(TAG,
-               "PSRAM stack task creation failed for text mailbox, retrying "
-               "with internal RAM");
-    }
-#endif
-    if (rc != pdPASS) {
-      rc = xTaskCreate(consumer_task, "txt_handler", CONSUMER_STACK_SIZE,
-                       nullptr, CONSUMER_PRIORITY, &s_consumer_task);
-    }
+    // This task applies server settings that persist to flash (the config blob
+    // and quiet-hours windows). Flash operations disable the CPU cache, which
+    // makes PSRAM inaccessible, so the stack MUST live in internal RAM. Do not
+    // move it to a PSRAM stack (xTaskCreateWithCaps + MALLOC_CAP_SPIRAM): any
+    // NVS write from here would trip esp_task_stack_is_sane_cache_disabled().
+    BaseType_t rc = xTaskCreate(consumer_task, "txt_handler",
+                                CONSUMER_STACK_SIZE, nullptr, CONSUMER_PRIORITY,
+                                &s_consumer_task);
     if (rc != pdPASS) {
       ESP_LOGE(TAG, "Failed to create text mailbox consumer task");
       return false;
@@ -311,15 +303,14 @@ void process_text_message(const char* json_str) {
     if (ota_url) {
       memcpy(ota_url, ota_url_value, url_len);
       ESP_LOGI(TAG, "OTA URL received via WS: %s", ota_url);
-      BaseType_t ota_rc = xTaskCreatePinnedToCoreWithCaps(
-          ota_task_entry, "ota_task", 8192, ota_url, 5,
-          nullptr, tskNO_AFFINITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      // OTA writes the app partition via esp_ota_write, which disables the
+      // flash cache; the task stack must be in internal RAM. A PSRAM stack here
+      // trips esp_task_stack_is_sane_cache_disabled() on the first write.
+      BaseType_t ota_rc =
+          xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
       if (ota_rc != pdPASS) {
-        BaseType_t fb = xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
-        if (fb != pdPASS) {
-          ESP_LOGE(TAG, "Failed to create OTA task; dropping request");
-          free(ota_url);  // no task will run to free it
-        }
+        ESP_LOGE(TAG, "Failed to create OTA task; dropping request");
+        free(ota_url);  // no task will run to free it
       }
     }
   }
