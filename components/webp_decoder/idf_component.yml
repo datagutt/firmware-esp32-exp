@@ -2,6 +2,6 @@ dependencies:
   libwebp:
     git: https://github.com/datagutt/libwebp.git
     # Pinned commit for reproducible builds; bump when the fork advances.
-    # 971c22a (main): lossless PIE acceleration plus upstream webm fixes
-    # (xtensa-pie branch merged into main).
-    version: 971c22a5642dec79632187ac477a3c1a5b72c0f1
+    # eb05068 (main): -O2 build, internal-RAM small allocations, PIE
+    # predictor inverse 0/2 (on top of 971c22a lossless PIE).
+    version: eb05068bd49924601cea9a4ccfe845f7ed4415ed
