@@ -28,9 +28,11 @@ public:
     /// Get info about the loaded WebP.
     WebpDecoderInfo get_info() const;
 
-    /// Decode next frame into RGBA buffer (width * height * 4 bytes).
-    /// Auto-loops for animations.
-    esp_err_t get_next_frame(uint8_t* rgba_out);
+    /// Decode the next frame. On success *pixels_out points to the decoded
+    /// RGBA canvas (canvas_width * canvas_height * 4 bytes). The buffer is
+    /// owned by the decoder and stays valid until the next get_next_frame()
+    /// call, reset(), or destruction. Auto-loops for animations.
+    esp_err_t get_next_frame(const uint8_t** pixels_out);
 
     /// Get delay of last decoded frame in ms. 0 for static images.
     uint32_t get_frame_delay() const;

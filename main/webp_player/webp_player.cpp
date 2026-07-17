@@ -111,10 +111,9 @@ struct PlayerContext {
   gfx_source_type_t source_type = GFX_SOURCE_RAM;
   const char* embedded_name = nullptr;
 
-  // Decoder
+  // Decoder (owns the decoded frame buffer; see WebpDecoder::get_next_frame)
   WebpDecoder decoder;
   WebpDecoderInfo decoder_info = {};
-  uint8_t* frame_buf = nullptr;
 
   // Frame copies for row diffing (lazily allocated). shown_frame mirrors what
   // the panel displays; back_frame mirrors the back DMA buffer, which after a
@@ -282,10 +281,6 @@ bool is_static_asset(const void* ptr) { return asset_is_static(ptr); }
 void destroy_decoder() {
   ctx.decoder = WebpDecoder();  // Reset to default
   ctx.decoder_info = {};
-  if (ctx.frame_buf) {
-    heap_caps_free(ctx.frame_buf);
-    ctx.frame_buf = nullptr;
-  }
   if (ctx.shown_frame) {
     heap_caps_free(ctx.shown_frame);
     ctx.shown_frame = nullptr;
@@ -315,20 +310,14 @@ bool create_decoder() {
 
   ctx.decoder_info = ctx.decoder.get_info();
 
+  // Bound the canvas even though the decoder owns the frame buffer: a huge
+  // canvas would still cost decode time and diff-copy allocations downstream.
   size_t frame_size = static_cast<size_t>(ctx.decoder_info.canvas_width) *
                       ctx.decoder_info.canvas_height * 4;
   if (frame_size > CONFIG_HTTP_BUFFER_SIZE_MAX) {
     ESP_LOGE(TAG, "Decoded frame too large: %zu bytes (%ux%u)",
              frame_size, ctx.decoder_info.canvas_width,
              ctx.decoder_info.canvas_height);
-    ctx.decoder = WebpDecoder();
-    return false;
-  }
-
-  ctx.frame_buf = static_cast<uint8_t*>(
-      heap_caps_malloc(frame_size, MALLOC_CAP_SPIRAM));
-  if (!ctx.frame_buf) {
-    ESP_LOGE(TAG, "Failed to allocate frame buffer (%zu bytes)", frame_size);
     ctx.decoder = WebpDecoder();
     return false;
   }
@@ -590,7 +579,8 @@ int decode_and_render_frame() {
     return 60000;  // Unlimited duration: sleep up to 60s per iteration
   }
 
-  if (ctx.decoder.get_next_frame(ctx.frame_buf) != ESP_OK) {
+  const uint8_t* frame = nullptr;
+  if (ctx.decoder.get_next_frame(&frame) != ESP_OK) {
     return -1;
   }
 
@@ -598,7 +588,7 @@ int decode_and_render_frame() {
   ctx.decode_error_count = 0;
 
   // Render frame, skipping unchanged content
-  render_frame_diffed(ctx.frame_buf, ctx.decoder_info.canvas_width,
+  render_frame_diffed(frame, ctx.decoder_info.canvas_width,
                       ctx.decoder_info.canvas_height);
 
   int delay_ms = static_cast<int>(ctx.decoder.get_frame_delay());

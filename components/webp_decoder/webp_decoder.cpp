@@ -1,7 +1,6 @@
 #include "webp_decoder.h"
 
-#include <cstring>
-
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <webp/decode.h>
 #include <webp/demux.h>
@@ -20,13 +19,15 @@ struct WebpDecoder::Impl {
     int last_timestamp = 0;
     uint32_t current_frame_delay_ms = 0;
 
-    // Static: decode on-demand from source data (no pre-decoded buffer needed)
+    // Static: decode on-demand from source data into a decoder-owned buffer
     bool still_decoded = false;
+    uint8_t* still_buf = nullptr;
 
     ~Impl() {
         if (anim_decoder) {
             WebPAnimDecoderDelete(anim_decoder);
         }
+        heap_caps_free(still_buf);
     }
 };
 
@@ -94,7 +95,7 @@ esp_err_t WebpDecoder::init(const uint8_t* data, size_t size) {
                  p->info.canvas_height);
     } else {
         // Static path: validate by checking features only; actual decode
-        // happens on-demand in get_next_frame() to avoid a separate buffer.
+        // happens on-demand in get_next_frame() into a decoder-owned buffer.
         p->info.frame_count = 1;
         p->still_decoded = false;
         p->current_frame_delay_ms = 0;
@@ -112,18 +113,30 @@ WebpDecoderInfo WebpDecoder::get_info() const {
     return impl_->info;
 }
 
-esp_err_t WebpDecoder::get_next_frame(uint8_t* rgba_out) {
-    if (!impl_ || !rgba_out) return ESP_ERR_INVALID_STATE;
+esp_err_t WebpDecoder::get_next_frame(const uint8_t** pixels_out) {
+    if (!impl_ || !pixels_out) return ESP_ERR_INVALID_STATE;
 
     if (!impl_->info.is_animated) {
-        // Static: decode directly into the caller's buffer (no intermediate
-        // copy). Only decode once; subsequent calls are a no-op since the
-        // caller's buffer already holds the pixels.
+        // Static: decode once into a decoder-owned buffer; subsequent calls
+        // just hand the cached pixels back.
         if (!impl_->still_decoded) {
             size_t frame_size = static_cast<size_t>(impl_->info.canvas_width) *
                                 impl_->info.canvas_height * 4;
-            if (!WebPDecodeRGBAInto(impl_->data, impl_->data_size, rgba_out,
-                                    frame_size,
+            if (!impl_->still_buf) {
+                impl_->still_buf = static_cast<uint8_t*>(
+                    heap_caps_malloc(frame_size, MALLOC_CAP_SPIRAM));
+                if (!impl_->still_buf) {
+                    impl_->still_buf = static_cast<uint8_t*>(heap_caps_malloc(
+                        frame_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+                }
+                if (!impl_->still_buf) {
+                    ESP_LOGE(TAG, "Static frame buffer alloc failed (%zu)",
+                             frame_size);
+                    return ESP_ERR_NO_MEM;
+                }
+            }
+            if (!WebPDecodeRGBAInto(impl_->data, impl_->data_size,
+                                    impl_->still_buf, frame_size,
                                     static_cast<int>(impl_->info.canvas_width * 4))) {
                 ESP_LOGE(TAG, "Failed to decode static WebP");
                 return ESP_FAIL;
@@ -131,6 +144,7 @@ esp_err_t WebpDecoder::get_next_frame(uint8_t* rgba_out) {
             impl_->still_decoded = true;
         }
         impl_->current_frame_delay_ms = 0;
+        *pixels_out = impl_->still_buf;
         return ESP_OK;
     }
 
@@ -140,16 +154,16 @@ esp_err_t WebpDecoder::get_next_frame(uint8_t* rgba_out) {
         impl_->last_timestamp = 0;
     }
 
+    // The returned pointer references the anim decoder's internal canvas,
+    // valid until the next WebPAnimDecoderGetNext/Reset. Handing it out
+    // directly avoids a full-canvas PSRAM-to-PSRAM copy per frame.
     uint8_t* pix = nullptr;
     int timestamp = 0;
     if (!WebPAnimDecoderGetNext(impl_->anim_decoder, &pix, &timestamp)) {
         ESP_LOGE(TAG, "WebPAnimDecoderGetNext failed");
         return ESP_FAIL;
     }
-
-    size_t frame_size = static_cast<size_t>(impl_->info.canvas_width) *
-                        impl_->info.canvas_height * 4;
-    memcpy(rgba_out, pix, frame_size);
+    *pixels_out = pix;
 
     int delay = timestamp - impl_->last_timestamp;
     impl_->current_frame_delay_ms =
