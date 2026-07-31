@@ -13,7 +13,7 @@ This firmware shares ancestry with the Koios Digital MATRX ecosystem. Their fixe
 
 ## Repos and lineage map
 
-Local clones live in `inspiration/` at the repo root (gitignored). `kd_common` has no standalone clone; read it via the GitHub API or `https://github.com/koiosdigital/kd_common/commit/<sha>.patch`.
+Local clones live in `inspiration/` at the repo root (gitignored). All five repos in `last-sync.json` have a clone there, `kd_common` included. Fall back to `https://github.com/koiosdigital/kd_common/commit/<sha>.patch` only if a clone is missing.
 
 | Reference repo | Maps to us |
 |---|---|
@@ -27,14 +27,16 @@ Local clones live in `inspiration/` at the repo root (gitignored). `kd_common` h
 | koios-sdk `core/ota.c` + ports | `main/system/ota*` |
 | kd_common `src/ntp.c` | `main/system/ntp.cpp` (same TZ-fetch lineage) |
 | kd_common heap tracing | `main/system/heap_monitor*` |
+| kd_common `src/wifi.c`, `src/provisioning.c`, `src/net.c` | `main/network/wifi*` + `main/system/event_bus` (concept-level; their connect/disconnect callback registry is our event bus). Easy to miss because their feature commits refactor this core in passing. |
+| kd_common `src/kd_common.c` | `main/startup/runtime_orchestrator` (boot phase ordering) |
 | esp_websocket_client | our pinned dependency in `main/idf_component.yml` (bump the pin) |
 | kd_pixdriver | no mapping (no addressable LED hardware) |
 
 ## Procedure
 
 1. Read `last-sync.json`.
-2. For each local clone: `git -C inspiration/<repo> fetch origin --quiet`, then `git log <last-sha>..origin/main --oneline`. For kd_common, list commits with `gh api repos/koiosdigital/kd_common/commits`. Run this gathering in a sandbox or subagent; only the commit lists need to reach the conversation.
-3. Triage every new commit: read the diff (`git show`, or the `.patch` URL for kd_common) and classify:
+2. For each clone in `last-sync.json`: `git -C inspiration/<repo> fetch origin --quiet`, then `git log <last-sha>..origin/main --oneline`. Run this gathering in a sandbox or subagent; only the commit lists need to reach the conversation.
+3. Triage every new commit: read the diff (`git show`) and classify. Read the **whole** diff, not just the files the lineage map names: their feature commits routinely refactor shared core (WiFi, provisioning, boot ordering) in passing, and a `--stat` that looks like "eth support" can still be hiding a behavioural change to code we share. Classify as:
    - **port**: fixes or improves code we share or have already ported (use the lineage map; check whether our copy has the same defect before assuming)
    - **concept**: their implementation differs but the idea transfers
    - **skip**: their-stack-specific (protobuf, mTLS/PKI, BLE, kd_pixdriver, submodule bumps, version bumps, sdkconfig noise)
