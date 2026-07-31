@@ -312,8 +312,12 @@ void http_apply_prefetch() {
     ESP_LOGI(TAG, "OTA URL received via HTTP: %s", ota_url);
     // OTA writes the app partition (flash cache disabled during the write), so
     // its stack must be in internal RAM, never PSRAM.
+    //
+    // Priority 3 matches http_fetch: both are I/O-bound downloads that block on
+    // the socket, so they belong in the same class. Anything higher lets a long
+    // OTA fetch outrank unrelated work for minutes at a time.
     BaseType_t ota_rc =
-        xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+        xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 3, nullptr);
     if (ota_rc != pdPASS) {
       ESP_LOGE(TAG, "Failed to create OTA task; dropping request");
       free(ota_url);  // no task will run to free it

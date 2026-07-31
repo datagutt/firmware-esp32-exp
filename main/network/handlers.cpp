@@ -306,8 +306,11 @@ void process_text_message(const char* json_str) {
       // OTA writes the app partition via esp_ota_write, which disables the
       // flash cache; the task stack must be in internal RAM. A PSRAM stack here
       // trips esp_task_stack_is_sane_cache_disabled() on the first write.
+      //
+      // Priority 3 matches http_fetch: both are I/O-bound downloads that block
+      // on the socket, so they belong in the same class.
       BaseType_t ota_rc =
-          xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 5, nullptr);
+          xTaskCreate(ota_task_entry, "ota_task", 8192, ota_url, 3, nullptr);
       if (ota_rc != pdPASS) {
         ESP_LOGE(TAG, "Failed to create OTA task; dropping request");
         free(ota_url);  // no task will run to free it
