@@ -6,7 +6,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "font5x7.h"
+#include "nvs_handle.h"
 #include "nvs_settings.h"
+#include "scheduler.h"
+#include "webp_player.h"
 
 static Hub75Driver *_matrix;
 
@@ -32,6 +35,198 @@ constexpr int kUpscaleBatchDstRows = kUpscaleBatchSrcRows * 2;
 static uint32_t _scale_buf[128 * kUpscaleBatchDstRows];
 #endif
 
+// ---- Panel hardware tuning (console-settable, persisted in NVS) ----
+//
+// These describe how the physical panel is wired and clocked, which the build
+// cannot always know: the same board ships with panels whose R and B lines are
+// swapped, or that will not latch cleanly at the compiled clock. They live in
+// their own namespace instead of the main config struct so the captive portal,
+// REST and WebSocket config contracts stay unchanged; this is a repair and
+// bring-up facility, not a user preference.
+//
+// Note this is separate from config_get().swap_colors, which swaps the G and B
+// *pin assignments* at init. This swaps R and B in the pixel data.
+static const char *HW_NVS_NAMESPACE = "disp_hw";
+static const char *HW_KEY_COLOR_ORDER = "color_order";  // u8: 0=rgb, 1=bgr
+static const char *HW_KEY_BIT_DEPTH = "bit_depth";      // u8: 4-12, 0=default
+static const char *HW_KEY_CLK_MHZ = "clk_mhz";          // u8: 8|10|16|20|32
+
+// Retained so display_reinit() can re-apply a mutated config;
+// display_initialize populates it once.
+static Hub75Config _mxconfig;
+
+// True when the panel has R and B swapped relative to a normal panel.
+static bool _panel_bgr = false;
+
+// Holds the driver across a failed re-init so the caller's revert can restart
+// it instead of leaving the panel dark with no way back short of a reboot.
+static Hub75Driver *_reinit_orphan = NULL;
+
+// Our RGBA frame buffers are handed to the driver as BGR on a normal panel
+// (that is the byte order libwebp produces for RGB888_32), so a swapped panel
+// is the one that needs RGB. The user-facing name follows the panel, not the
+// buffer, hence the inversion here.
+static inline Hub75ColorOrder rgba_draw_order() {
+  return _panel_bgr ? Hub75ColorOrder::RGB : Hub75ColorOrder::BGR;
+}
+
+static bool clock_speed_from_mhz(int mhz, Hub75ClockSpeed *out) {
+  switch (mhz) {
+    case 8:
+      *out = Hub75ClockSpeed::HZ_8M;
+      return true;
+    case 10:
+      *out = Hub75ClockSpeed::HZ_10M;
+      return true;
+    case 16:
+      *out = Hub75ClockSpeed::HZ_16M;
+      return true;
+    case 20:
+      *out = Hub75ClockSpeed::HZ_20M;
+      return true;
+    case 32:
+      *out = Hub75ClockSpeed::HZ_32M;
+      return true;
+    default:
+      return false;
+  }
+}
+
+static uint8_t clock_speed_to_mhz(Hub75ClockSpeed speed) {
+  return (uint8_t)((uint32_t)speed / 1000000);
+}
+
+// nvs_settings_init() runs before the display comes up, so NVS is already
+// mounted here; missing keys just leave the compiled defaults in place.
+static void hw_settings_load(void) {
+  NvsHandle nvs(HW_NVS_NAMESPACE, NVS_READONLY);
+  if (!nvs) return;
+
+  uint8_t v = 0;
+  if (nvs.get_u8(HW_KEY_COLOR_ORDER, &v) == ESP_OK) {
+    _panel_bgr = (v != 0);
+  }
+  if (nvs.get_u8(HW_KEY_BIT_DEPTH, &v) == ESP_OK && v >= 4 && v <= 12) {
+    _mxconfig.bit_depth = v;
+  }
+  if (nvs.get_u8(HW_KEY_CLK_MHZ, &v) == ESP_OK) {
+    Hub75ClockSpeed speed;
+    if (clock_speed_from_mhz(v, &speed)) {
+      _mxconfig.output_clock_speed = speed;
+    }
+  }
+
+  if (_mxconfig.bit_depth) {
+    ESP_LOGI(TAG, "Panel tuning: color_order=%s bit_depth=%u clk=%uMHz",
+             _panel_bgr ? "bgr" : "rgb", _mxconfig.bit_depth,
+             clock_speed_to_mhz(_mxconfig.output_clock_speed));
+  } else {
+    ESP_LOGI(TAG, "Panel tuning: color_order=%s bit_depth=default clk=%uMHz",
+             _panel_bgr ? "bgr" : "rgb",
+             clock_speed_to_mhz(_mxconfig.output_clock_speed));
+  }
+}
+
+static bool hw_setting_save(const char *key, uint8_t value) {
+  NvsHandle nvs(HW_NVS_NAMESPACE, NVS_READWRITE);
+  if (!nvs) {
+    ESP_LOGE(TAG, "Failed to open %s namespace", HW_NVS_NAMESPACE);
+    return false;
+  }
+  if (nvs.set_u8(key, value) != ESP_OK || nvs.commit() != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to persist %s", key);
+    return false;
+  }
+  return true;
+}
+
+// Rebuild the driver from the current _mxconfig. Quiesces the render pipeline
+// first so nothing is mid-draw when the DMA engine goes away, and restores the
+// scheduler unless something else (quiet hours) had already paused it.
+//
+// The driver object itself is reused (set_config on a stopped driver); only its
+// DMA engine is torn down and rebuilt. Keeping the object means a failed
+// begin() leaves something to retry with.
+static bool display_reinit(void) {
+  if (_matrix == NULL) return false;
+
+  const bool was_paused = scheduler_is_paused();
+  scheduler_pause();  // stops timers, gfx_stop(), blanks the panel
+  gfx_wait_idle();    // player task has left the draw path
+
+  // Publish NULL before teardown so any other drawer bails at its null check
+  // rather than following a dangling pointer into a freed DMA engine.
+  Hub75Driver *m = _matrix;
+  _matrix = NULL;
+  vTaskDelay(pdMS_TO_TICKS(20));
+
+  // begin() applies config_.brightness, so carry the live value across.
+  _mxconfig.brightness = m->get_brightness();
+
+  m->end();
+  m->set_config(_mxconfig);
+
+  const bool ok = m->begin();
+  if (ok) {
+    _matrix = m;
+#ifdef CONFIG_DISPLAY_FRAME_SYNC
+    // begin() creates a fresh platform DMA object, which is where the frame
+    // callback is stored, so it has to be re-registered or display_wait_frame
+    // silently times out forever.
+    if (_frame_sync_sem) {
+      _matrix->set_frame_callback(frame_sync_isr, _frame_sync_sem);
+    }
+#endif
+    _matrix->clear();
+  } else {
+    // Leave _matrix NULL: begin() failed, so there is no DMA engine to draw
+    // into. The caller reverts the setting and retries, which is why the driver
+    // object is kept alive here.
+    ESP_LOGE(TAG, "Display re-init failed; panel is off pending revert");
+    _reinit_orphan = m;
+  }
+
+  if (!was_paused) scheduler_resume();
+  return ok;
+}
+
+static void apply_bit_depth(uint8_t v) { _mxconfig.bit_depth = v; }
+
+static void apply_clk_mhz(uint8_t v) {
+  Hub75ClockSpeed speed;
+  if (clock_speed_from_mhz(v, &speed)) _mxconfig.output_clock_speed = speed;
+}
+
+// Apply a tuning value that needs a driver restart, rolling both the live
+// config and the stored value back if the panel will not come up with it.
+// Without the rollback a value the hardware cannot support (a bit depth that
+// does not fit in DMA memory, a clock the panel will not latch) would already
+// be in NVS and would kill the display on every subsequent boot.
+static bool display_apply_tuning(const char *key, void (*apply)(uint8_t),
+                                 uint8_t new_value, uint8_t old_value) {
+  apply(new_value);
+  if (!hw_setting_save(key, new_value)) {
+    apply(old_value);
+    return false;
+  }
+  if (display_reinit()) return true;
+
+  ESP_LOGW(TAG, "Reverting %s to %u after failed re-init", key, old_value);
+  apply(old_value);
+  hw_setting_save(key, old_value);
+
+  // display_reinit() parked the driver here when begin() failed; take it back
+  // so the retry has an object to restart.
+  if (_reinit_orphan) {
+    _matrix = _reinit_orphan;
+    _reinit_orphan = NULL;
+  }
+  if (!display_reinit()) {
+    ESP_LOGE(TAG, "Revert also failed; display stays off until reboot");
+  }
+  return false;
+}
+
 int display_initialize(void) {
   // Get swap_colors setting
   bool swap_colors = config_get().swap_colors;
@@ -40,8 +235,9 @@ int display_initialize(void) {
   ESP_LOGI(TAG, "Initializing display with swap_colors=%s",
            swap_colors ? "true" : "false");
 
-  // Initialize the panel.
-  Hub75Config mxconfig;
+  // Initialize the panel. Bound to the retained config so display_reinit() can
+  // re-apply it later without rebuilding the whole board preset.
+  Hub75Config &mxconfig = _mxconfig;
   mxconfig.panel_width = CONFIG_HUB75_PANEL_WIDTH;
   mxconfig.panel_height = CONFIG_HUB75_PANEL_HEIGHT;
 
@@ -281,6 +477,10 @@ int display_initialize(void) {
 
   mxconfig.brightness = CONFIG_HUB75_BRIGHTNESS;
 
+  // Applied last so stored panel tuning wins over the compiled defaults,
+  // matching the NVS > secrets.json > Kconfig override order.
+  hw_settings_load();
+
   _matrix = new Hub75Driver(mxconfig);
 
   if (_matrix == NULL) {
@@ -409,7 +609,7 @@ void display_draw_buffer(const uint8_t *pix, int width, int height) {
       }
       _matrix->draw_pixels(0, batch_y * 2, 128, kUpscaleBatchDstRows,
                            (uint8_t *)_scale_buf,
-                           Hub75PixelFormat::RGB888_32, Hub75ColorOrder::BGR);
+                           Hub75PixelFormat::RGB888_32, rgba_draw_order());
     }
     return;
   }
@@ -417,7 +617,7 @@ void display_draw_buffer(const uint8_t *pix, int width, int height) {
 
   // Default path: bulk transfer for native resolution
   _matrix->draw_pixels(0, 0, width, height, pix, Hub75PixelFormat::RGB888_32,
-                       Hub75ColorOrder::BGR);
+                       rgba_draw_order());
 }
 
 // True when a canvas of this size renders through a path that
@@ -456,7 +656,7 @@ void display_draw_span(const uint8_t *pix, int x, int y, int width,
       dst_row2[sx * 2 + 1] = pixel;
     }
     _matrix->draw_pixels(x * 2, y * 2, dst_w, 2, (uint8_t *)_scale_buf,
-                         Hub75PixelFormat::RGB888_32, Hub75ColorOrder::BGR);
+                         Hub75PixelFormat::RGB888_32, rgba_draw_order());
     return;
   }
 #endif
@@ -470,7 +670,35 @@ void display_draw_span(const uint8_t *pix, int x, int y, int width,
     return;
   }
   _matrix->draw_pixels(x, y, width, 1, pix, Hub75PixelFormat::RGB888_32,
-                       Hub75ColorOrder::BGR);
+                       rgba_draw_order());
+}
+
+bool display_get_panel_bgr(void) { return _panel_bgr; }
+
+bool display_set_panel_bgr(bool bgr) {
+  if (!hw_setting_save(HW_KEY_COLOR_ORDER, bgr ? 1 : 0)) return false;
+  // Read per draw call, so no re-init is needed; the next frame is correct.
+  _panel_bgr = bgr;
+  return true;
+}
+
+uint8_t display_get_bit_depth(void) { return _mxconfig.bit_depth; }
+
+bool display_set_bit_depth(uint8_t depth) {
+  if (depth < 4 || depth > 12) return false;
+  return display_apply_tuning(HW_KEY_BIT_DEPTH, apply_bit_depth, depth,
+                              _mxconfig.bit_depth);
+}
+
+uint8_t display_get_clock_mhz(void) {
+  return clock_speed_to_mhz(_mxconfig.output_clock_speed);
+}
+
+bool display_set_clock_mhz(uint8_t mhz) {
+  Hub75ClockSpeed speed;
+  if (!clock_speed_from_mhz(mhz, &speed)) return false;
+  return display_apply_tuning(HW_KEY_CLK_MHZ, apply_clk_mhz, mhz,
+                              clock_speed_to_mhz(_mxconfig.output_clock_speed));
 }
 
 void display_draw(const uint8_t *pix, int width, int height) {

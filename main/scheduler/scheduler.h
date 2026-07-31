@@ -22,6 +22,10 @@ void scheduler_pause();
 /// WebSocket mode returns to idle to await the next server push. Idempotent.
 void scheduler_resume();
 
+/// True while playback is suspended. Lets a caller that needs to pause around
+/// its own work leave an existing pause (quiet hours) alone on the way out.
+bool scheduler_is_paused();
+
 /// Called by sockets module on WebSocket connect.
 void scheduler_on_ws_connect();
 

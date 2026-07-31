@@ -32,6 +32,17 @@ void display_text(const char* text, int x, int y, uint8_t r, uint8_t g,
 void display_flip(void);
 bool display_wait_frame(uint32_t timeout_ms);
 
+// Panel hardware tuning. Each setter persists to NVS and returns false if the
+// value is out of range or the store failed. Color order applies to the next
+// frame; bit depth and clock speed re-initialize the driver, which briefly
+// blanks the panel and pauses playback.
+bool display_get_panel_bgr(void);
+bool display_set_panel_bgr(bool bgr);
+uint8_t display_get_bit_depth(void);  // 0 = compile-time default
+bool display_set_bit_depth(uint8_t depth);
+uint8_t display_get_clock_mhz(void);
+bool display_set_clock_mhz(uint8_t mhz);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,9 +7,10 @@ dependencies:
   esp-hub75:
     git: https://github.com/datagutt/esp-hub75.git
     # Pinned commit for reproducible builds; bump when the fork advances.
-    # bc063a5: internal-RAM driver allocation (on top of ba0e60a gpio drive
-    # strength + fused row-pair draw path + c6 fixes).
-    version: bc063a51cd6ec4616a9ef2ac32b35dbc36866d63
+    # 2265525: runtime-selectable bit depth on every DMA platform, set_config(),
+    # and DMA engine cleanup on begin() failure (on top of bc063a5 internal-RAM
+    # driver allocation).
+    version: 22655254530ffce012b390f8eaeb63b25adf452b
     path: components/hub75
   espressif/cjson: "*"
   espressif/mdns: "*"

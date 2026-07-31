@@ -675,6 +675,12 @@ void scheduler_pause() {
   ESP_LOGI(TAG, "Paused for quiet hours");
 }
 
+bool scheduler_is_paused() {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return false;
+  return ctx.paused;
+}
+
 void scheduler_resume() {
   raii::MutexGuard lock(ctx.mutex);
   if (!lock) return;

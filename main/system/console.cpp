@@ -7,6 +7,8 @@
 #include <cassert>
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #include <esp_app_desc.h>
 #include <esp_console.h>
@@ -14,6 +16,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "display.h"
 #include "heap_monitor.h"
 
 #if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
@@ -127,6 +130,72 @@ int cmd_assert(int argc, char** argv) {
   return 0;
 }
 
+// Panel hardware tuning. These exist to diagnose and repair a mis-wired or
+// marginal panel over serial without a rebuild, so each prints the current
+// value when called with no argument.
+int cmd_color_order(int argc, char** argv) {
+  if (argc < 2) {
+    printf("color_order: %s\nusage: color_order <rgb|bgr>\n",
+           display_get_panel_bgr() ? "bgr" : "rgb");
+    return 0;
+  }
+
+  bool bgr;
+  if (strcmp(argv[1], "rgb") == 0) {
+    bgr = false;
+  } else if (strcmp(argv[1], "bgr") == 0) {
+    bgr = true;
+  } else {
+    printf("invalid color order '%s' (expected rgb or bgr)\n", argv[1]);
+    return 1;
+  }
+
+  if (!display_set_panel_bgr(bgr)) {
+    printf("failed to store color order\n");
+    return 1;
+  }
+  printf("color_order = %s (applies to the next frame)\n", bgr ? "bgr" : "rgb");
+  return 0;
+}
+
+int cmd_bit_depth(int argc, char** argv) {
+  if (argc < 2) {
+    printf("bit_depth: %u (0 = compile-time default)\n"
+           "usage: bit_depth <4-12>\n",
+           display_get_bit_depth());
+    return 0;
+  }
+
+  int depth = atoi(argv[1]);
+  if (depth < 4 || depth > 12) {
+    printf("bit depth must be 4-12\n");
+    return 1;
+  }
+
+  printf("bit_depth = %d, re-initializing display...\n", depth);
+  if (!display_set_bit_depth(static_cast<uint8_t>(depth))) {
+    printf("failed to apply bit depth\n");
+    return 1;
+  }
+  return 0;
+}
+
+int cmd_clock_speed(int argc, char** argv) {
+  if (argc < 2) {
+    printf("clock_speed: %uMHz\nusage: clock_speed <8|10|16|20|32>\n",
+           display_get_clock_mhz());
+    return 0;
+  }
+
+  int mhz = atoi(argv[1]);
+  printf("clock_speed = %dMHz, re-initializing display...\n", mhz);
+  if (!display_set_clock_mhz(static_cast<uint8_t>(mhz))) {
+    printf("failed to apply clock speed (valid: 8, 10, 16, 20, 32)\n");
+    return 1;
+  }
+  return 0;
+}
+
 void register_commands() {
   esp_console_register_help_command();
 
@@ -158,6 +227,32 @@ void register_commands() {
        .help = "Crash the system for testing",
        .hint = nullptr,
        .func = &cmd_assert,
+       .argtable = nullptr,
+       .func_w_context = nullptr,
+       .context = nullptr},
+      {.command = "color_order",
+       .help =
+           "Panel color order (rgb|bgr) for R/B-swapped panels, stored in NVS",
+       .hint = nullptr,
+       .func = &cmd_color_order,
+       .argtable = nullptr,
+       .func_w_context = nullptr,
+       .context = nullptr},
+      {.command = "bit_depth",
+       .help =
+           "Panel color bit depth 4-12, stored in NVS, re-initializes the "
+           "display",
+       .hint = nullptr,
+       .func = &cmd_bit_depth,
+       .argtable = nullptr,
+       .func_w_context = nullptr,
+       .context = nullptr},
+      {.command = "clock_speed",
+       .help =
+           "HUB75 clock in MHz (8|10|16|20|32), stored in NVS, re-initializes "
+           "the display",
+       .hint = nullptr,
+       .func = &cmd_clock_speed,
        .argtable = nullptr,
        .func_w_context = nullptr,
        .context = nullptr},
