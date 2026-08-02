@@ -1,7 +1,7 @@
 {
-  "matrx-fw": "650bf3619d4829abd466bbd03b8d9fa3c13530d1",
-  "koios-sdk": "bbc049c6ae5e5d9dbe95a3cf0b7dadf493c3059c",
-  "kd_common": "5577c4bcdc6153bf5927b1d1eb8caf86ab09cd1b",
+  "matrx-fw": "08ca74a5732cee2c58936e2e317e88b8c9b1c1ec",
+  "koios-sdk": "368bb784360c3a01e770d4c3c5e9d73937f7371e",
+  "kd_common": "cac5b3508dd9b88c2bfa8130cef4d5880e03d0de",
   "esp_websocket_client": "867f82462747d85ea015334feff157c69e361ac6",
   "kd_pixdriver": "83fed365ab833543362ea2b26011d1cc6e4d86f0"
 }

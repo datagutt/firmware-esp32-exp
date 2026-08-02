@@ -13,7 +13,7 @@ This firmware shares ancestry with the Koios Digital MATRX ecosystem. Their fixe
 
 ## Repos and lineage map
 
-Local clones live in `inspiration/` at the repo root (gitignored). All five repos in `last-sync.json` have a clone there, `kd_common` included. Fall back to `https://github.com/koiosdigital/kd_common/commit/<sha>.patch` only if a clone is missing.
+Local clones live in `inspiration/` at the repo root (gitignored). `matrx-fw`, `kd_common` and `koios-sdk` have clones there; `esp_websocket_client` and `kd_pixdriver` do not. For those two, list and read commits with `gh api repos/koiosdigital/<repo>/commits` (add `/<sha> --jq '.files[] | "--- \(.filename)\n\(.patch)"'` for a diff), or clone them if a round needs real review.
 
 | Reference repo | Maps to us |
 |---|---|
