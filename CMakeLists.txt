@@ -4,7 +4,13 @@ cmake_minimum_required(VERSION 3.16.0)
 execute_process(
     COMMAND ${PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/generate_secrets_cmake.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE _generate_secrets_result
 )
+# Fail the configure step rather than building against a stale secrets.cmake or
+# custom_ca.pem when the generator rejected something in secrets.json.
+if(NOT _generate_secrets_result EQUAL 0)
+    message(FATAL_ERROR "generate_secrets_cmake.py failed (exit ${_generate_secrets_result}); see output above")
+endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(firmware)

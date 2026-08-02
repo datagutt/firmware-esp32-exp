@@ -143,6 +143,19 @@ CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y
 # Handle cross-signed certificates (e.g. GTS Root R4 cross-signed by GlobalSign).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 
+# Merge a CUSTOM_CA from secrets.json into the compiled-in certificate bundle
+# (generate_secrets_cmake.py writes main/certs/custom_ca.pem). Devices then
+# trust both the custom CA and the default public roots through the same
+# esp_crt_bundle_attach, so no branching TLS setup is needed. A no-op when
+# CUSTOM_CA is unset: the placeholder .pem contributes zero certificates.
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CUSTOM_CERTIFICATE_BUNDLE_PATH="main/certs"
+
+# The hardware RSA accelerator caps out at SOC_RSA_MAX_BIT_LEN (4096 bits) on
+# every chip family we target. A CUSTOM_CA with a larger RSA key needs this
+# software fallback, otherwise verification silently produces a bad result.
+CONFIG_MBEDTLS_LARGE_KEY_SOFTWARE_MPI=y
+
 # Do not put math/fast functions in IRAM (saves internal RAM).
 CONFIG_NO_FAST_FUNCTIONS=y
 

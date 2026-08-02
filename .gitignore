@@ -15,6 +15,8 @@ sdkconfig.old
 secrets.cmake
 secrets.json
 secrets.json.injected*
+main/certs/custom_ca.pem
+__pycache__/
 .cache/clangd/*
 inspiration/
 components/assets/*_c

@@ -39,6 +39,24 @@ Example `secrets.json`:
 }
 ```
 
+#### Custom CA certificates
+
+If your server uses HTTPS with a private or self-signed CA, add the CA
+certificate as `CUSTOM_CA`:
+
+```json
+{
+    "REMOTE_URL": "https://homeServer.local:8000/tronbyt_1/next",
+    "CUSTOM_CA": "-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----\n"
+}
+```
+
+The value may be a PEM string (with `\n` escapes), a JSON array of lines, or a
+base64-encoded PEM blob. It is merged into the compiled-in certificate bundle at
+build time, so the device trusts your CA *and* the default public roots. A
+malformed value fails the build rather than producing a device that can't
+connect.
+
 ### Build and Flash
 
 Use the provided `Makefile` for convenience to build for specific hardware:
