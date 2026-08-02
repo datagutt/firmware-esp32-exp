@@ -58,10 +58,28 @@ struct RemoteState {
   uint8_t brightness;
   int32_t dwell_secs;
   char* ota_url;
+  char* image_url;
+  bool reboot_requested;
   bool oversize_detected;
   bool quiet;
   char etag[ETAG_MAX];
 };
+
+// Accepts the spellings a server is likely to send for a boolean header.
+bool parse_header_bool(const char* value) {
+  if (!value || value[0] == '\0') return false;
+  return strcasecmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
+         strcasecmp(value, "yes") == 0;
+}
+
+// Duplicates a header value into PSRAM. Returns nullptr on allocation failure,
+// which callers treat as "header not present".
+char* dup_header_value(const char* value) {
+  size_t len = strlen(value) + 1;
+  auto* copy = static_cast<char*>(heap_caps_malloc(len, MALLOC_CAP_SPIRAM));
+  if (copy) memcpy(copy, value, len);
+  return copy;
+}
 
 template <typename T>
 constexpr T max_val(T a, T b) {
@@ -138,13 +156,15 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
         state->dwell_secs = atoi(event->header_value);
       } else if (strcasecmp(event->header_key, "Tronbyt-OTA-URL") == 0) {
         if (state->ota_url) free(state->ota_url);
-        size_t url_len = strlen(event->header_value) + 1;
-        state->ota_url = static_cast<char*>(
-            heap_caps_malloc(url_len, MALLOC_CAP_SPIRAM));
-        if (state->ota_url) {
-          memcpy(state->ota_url, event->header_value, url_len);
-        }
+        state->ota_url = dup_header_value(event->header_value);
         ESP_LOGI(TAG, "Found OTA URL: %s", state->ota_url);
+      } else if (strcasecmp(event->header_key, "Tronbyt-Image-URL") == 0) {
+        if (state->image_url) free(state->image_url);
+        state->image_url = dup_header_value(event->header_value);
+        ESP_LOGI(TAG, "Found Image URL: %s", state->image_url);
+      } else if (strcasecmp(event->header_key, "Tronbyt-Reboot") == 0) {
+        state->reboot_requested = parse_header_bool(event->header_value);
+        ESP_LOGI(TAG, "Tronbyt-Reboot value: %s", event->header_value);
       } else if (strcasecmp(event->header_key, "Tronbyt-Quiet") == 0) {
         state->quiet = atoi(event->header_value) != 0;
         ESP_LOGD(TAG, "Tronbyt-Quiet value: %d", state->quiet);
@@ -251,7 +271,8 @@ void remote_reset_cache(void) {
 
 int remote_get(const char* url, uint8_t** buf, size_t* len,
                uint8_t* brightness_pct, int32_t* dwell_secs,
-               int* return_status_code, char** ota_url) {
+               int* return_status_code, char** ota_url, char** image_url,
+               bool* reboot_requested) {
   RemoteState state = {
       .buf = heap_caps_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT,
                               MALLOC_CAP_SPIRAM),
@@ -262,6 +283,8 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       .brightness = 255,
       .dwell_secs = -1,
       .ota_url = nullptr,
+      .image_url = nullptr,
+      .reboot_requested = false,
       .oversize_detected = false,
       .quiet = false,
       .etag = {},
@@ -302,6 +325,8 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       state.expected_len     = 0;
       state.oversize_detected = false;
       if (state.ota_url) { free(state.ota_url); state.ota_url = nullptr; }
+      if (state.image_url) { free(state.image_url); state.image_url = nullptr; }
+      state.reboot_requested = false;
       state.brightness  = 255;
       state.dwell_secs  = -1;
       state.quiet       = false;
@@ -316,7 +341,8 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
         state.size = CONFIG_HTTP_BUFFER_SIZE_DEFAULT;
         if (!state.buf) {
           ESP_LOGE(TAG, "couldn't reallocate HTTP receive buffer");
-          // state.ota_url is nullptr (reset above); nothing else to free.
+          // state.ota_url / state.image_url are nullptr (reset above);
+          // nothing else to free.
           return 1;
         }
       }
@@ -382,6 +408,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       esp_http_client_cleanup(http);
       free(state.buf);                       // safe even if nullptr (OOM path)
       free(state.ota_url);
+      free(state.image_url);
       return 1;
     }
 
@@ -404,6 +431,8 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       if (state.dwell_secs > -1 && state.dwell_secs < 300)
         *dwell_secs = state.dwell_secs;
       *ota_url = state.ota_url;
+      *image_url = state.image_url;
+      *reboot_requested = state.reboot_requested;
       esp_http_client_cleanup(http);
       return 0;
     }
@@ -416,6 +445,8 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       if (state.dwell_secs > -1 && state.dwell_secs < 300)
         *dwell_secs = state.dwell_secs;
       *ota_url = state.ota_url;
+      *image_url = state.image_url;
+      *reboot_requested = state.reboot_requested;
       esp_http_client_cleanup(http);
       free(state.buf);
       return 0;
@@ -428,6 +459,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
     if (!http_status_is_transient(status_code)) {  // 4xx (not 408/429): fatal
       free(state.buf);
       free(state.ota_url);
+      free(state.image_url);
       return 1;
     }
     // transient status -> loop continues to next attempt
@@ -437,5 +469,6 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
   ESP_LOGE(TAG, "fetch failed after %d attempts", REMOTE_MAX_ATTEMPTS);
   free(state.buf);      // safe if nullptr (callback OOM'd the buffer)
   free(state.ota_url);  // safe if nullptr (no OTA header or reset between attempts)
+  free(state.image_url);  // ditto for the image-URL header
   return 1;
 }

@@ -19,12 +19,14 @@
 #include "scheduler.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include <esp_event.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/idf_additions.h>
@@ -33,6 +35,7 @@
 
 #include "display.h"
 #include "event_bus.h"
+#include "nvs_settings.h"
 #include "ota.h"
 #include "raii_utils.hpp"
 #include "remote.h"
@@ -99,6 +102,8 @@ struct PrefetchResult {
   int32_t dwell_secs = -1;
   int status_code = 0;
   char* ota_url = nullptr;
+  char* image_url = nullptr;
+  bool reboot_requested = false;
   bool failed = false;
   std::atomic<bool> ready{false};
 
@@ -111,6 +116,11 @@ struct PrefetchResult {
       free(ota_url);
       ota_url = nullptr;
     }
+    if (image_url) {
+      free(image_url);
+      image_url = nullptr;
+    }
+    reboot_requested = false;
     len = 0;
     brightness_pct = 0;
     dwell_secs = 0;
@@ -239,11 +249,14 @@ void http_fetch_task(void* param) {
   int32_t dwell_secs = 0;
   int status_code = 0;
   char* ota_url = nullptr;
+  char* image_url = nullptr;
+  bool reboot_requested = false;
 
   ESP_LOGI(TAG, "HTTP fetch: %s", http_url_copy);
   bool ok = wifi_is_connected() &&
             !remote_get(http_url_copy, &webp, &len, &brightness_pct,
-                        &dwell_secs, &status_code, &ota_url);
+                        &dwell_secs, &status_code, &ota_url, &image_url,
+                        &reboot_requested);
   free(http_url_copy);
 
   // Phase 3 — publish result and decide what to do, under the lock.
@@ -251,6 +264,7 @@ void http_fetch_task(void* param) {
   if (!lock) {
     if (webp) free(webp);
     if (ota_url) free(ota_url);
+    if (image_url) free(image_url);
     vTaskDelete(nullptr);
     return;
   }
@@ -259,6 +273,7 @@ void http_fetch_task(void* param) {
   if (ctx.mode != Mode::HTTP) {
     if (webp) free(webp);
     if (ota_url) free(ota_url);
+    if (image_url) free(image_url);
     ctx.fetch_task = nullptr;
     vTaskDelete(nullptr);
     return;
@@ -271,6 +286,8 @@ void http_fetch_task(void* param) {
   ctx.prefetch.dwell_secs = dwell_secs;
   ctx.prefetch.status_code = status_code;
   ctx.prefetch.ota_url = ota_url;
+  ctx.prefetch.image_url = image_url;
+  ctx.prefetch.reboot_requested = reboot_requested;
   ctx.prefetch.failed = !ok;
   ctx.prefetch.ready.store(true);
 
@@ -306,6 +323,7 @@ void http_apply_prefetch() {
   }
 
   // Handle OTA
+  bool ota_started = false;
   if (ctx.prefetch.ota_url) {
     char* ota_url = ctx.prefetch.ota_url;
     ctx.prefetch.ota_url = nullptr;
@@ -321,6 +339,54 @@ void http_apply_prefetch() {
     if (ota_rc != pdPASS) {
       ESP_LOGE(TAG, "Failed to create OTA task; dropping request");
       free(ota_url);  // no task will run to free it
+    } else {
+      ota_started = true;
+    }
+  }
+
+  // Server-pushed image URL (Tronbyt-Image-URL): persist the new endpoint and
+  // reboot, so every consumer — scheduler, WebSocket client, web UI — comes up
+  // pointed at it. Only a URL that actually changed and saved triggers the
+  // reboot; re-sending the current URL every poll must not reboot-loop us.
+  if (ctx.prefetch.image_url) {
+    char* new_url = ctx.prefetch.image_url;
+    ctx.prefetch.image_url = nullptr;
+#ifdef CONFIG_LOCK_SERVER_URL
+    ESP_LOGW(TAG, "Tronbyt-Image-URL ignored (server URL locked)");
+#else
+    ESP_LOGI(TAG, "Image URL received via HTTP: %s", new_url);
+    system_config_t cfg = config_get();
+    if (strlen(new_url) >= sizeof(cfg.image_url)) {
+      ESP_LOGE(TAG, "Image URL too long (%u bytes); ignoring",
+               static_cast<unsigned>(strlen(new_url)));
+    } else if (strcmp(cfg.image_url, new_url) == 0) {
+      ESP_LOGI(TAG, "Image URL unchanged; no save needed");
+    } else {
+      snprintf(cfg.image_url, sizeof(cfg.image_url), "%s", new_url);
+      config_set(&cfg);  // persists to NVS synchronously
+      ESP_LOGI(TAG, "Updated image_url to %s", cfg.image_url);
+      ctx.prefetch.reboot_requested = true;
+    }
+#endif
+    free(new_url);
+  }
+
+  // Reboot on request (Tronbyt-Reboot, or a freshly-saved image URL). Do this
+  // before rendering: the fetched frame would be discarded by the restart
+  // anyway, and delaying the reboot by a full dwell serves nobody.
+  if (ctx.prefetch.reboot_requested) {
+    ctx.prefetch.reboot_requested = false;
+    if (ota_started || ota_in_progress()) {
+      // An update is writing the app partition. Restarting now would leave a
+      // half-written image; the OTA reboots on its own when it completes.
+      ESP_LOGW(TAG, "Reboot requested but OTA is running; deferring to OTA");
+    } else {
+      ESP_LOGI(TAG, "Reboot requested by server");
+      ctx.prefetch.clear();
+      // Brief pause so the log line reaches the console/syslog. Settings are
+      // already committed by config_set(), so nothing is at risk here.
+      vTaskDelay(pdMS_TO_TICKS(200));
+      esp_restart();
     }
   }
 
