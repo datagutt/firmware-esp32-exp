@@ -1,0 +1,19 @@
+# ESP32-S3 defaults. ESP-IDF layers this file right after sdkconfig.defaults
+# whenever the target is esp32s3, so every S3 board gets it before its own
+# sdkconfig.defaults.<board>.
+
+# On the S3, IRAM code and DRAM share one internal SRAM (DIRAM), so every
+# function placed in IRAM is taken straight from the heap that WiFi, TLS and
+# task stacks need. On the classic ESP32 IRAM is a separate region, which is
+# why these stay in sdkconfig.defaults there.
+#
+# The WiFi speed paths (about 23 KB) run from flash instead. Image downloads
+# are bounded by TLS and the server, not by raw WiFi throughput. Code that
+# must run with the cache disabled stays in IRAM regardless of these options.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n
+
+# The only ring buffer ISR user is the USB Serial/JTAG console driver, whose
+# interrupt handler is not in IRAM, so its ISR helpers can live in flash.
+CONFIG_RINGBUF_PLACE_ISR_FUNCTIONS_INTO_FLASH=y

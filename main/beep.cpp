@@ -19,6 +19,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "psram_alloc.h"
+
 namespace {
 
 constexpr const char* TAG = "beep";
@@ -139,7 +141,8 @@ void beep_task(void*) {
 
 void beep_play(beep_kind_t kind) {
   if (s_task == nullptr) {
-    if (xTaskCreate(beep_task, "beep", 3072, nullptr, 3, &s_task) != pdPASS) {
+    if (psram_or_internal_task_create(beep_task, "beep", 3072, nullptr, 3,
+                                      &s_task, tskNO_AFFINITY) != pdPASS) {
       s_task = nullptr;
       return;
     }

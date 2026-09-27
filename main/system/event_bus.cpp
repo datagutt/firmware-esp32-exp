@@ -10,6 +10,8 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include "psram_alloc.h"
+
 namespace {
 
 const char* TAG = "event_bus";
@@ -103,16 +105,11 @@ esp_err_t event_bus_init(void) {
     return ESP_ERR_NO_MEM;
   }
 
-  // Try SPIRAM-backed stack first, fall back to internal RAM
-  BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
+  // Subscribers run on this stack, so none of them may touch flash (see
+  // psram_alloc.h).
+  BaseType_t rc = psram_or_internal_task_create(
       dispatch_task, "event_bus", DISPATCH_STACK_SIZE, nullptr,
-      DISPATCH_TASK_PRIORITY, &s_bus.dispatch_task, tskNO_AFFINITY,
-      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-
-  if (rc != pdPASS) {
-    rc = xTaskCreate(dispatch_task, "event_bus", DISPATCH_STACK_SIZE, nullptr,
-                     DISPATCH_TASK_PRIORITY, &s_bus.dispatch_task);
-  }
+      DISPATCH_TASK_PRIORITY, &s_bus.dispatch_task, tskNO_AFFINITY);
 
   if (rc != pdPASS) {
     vSemaphoreDelete(s_bus.mutex);

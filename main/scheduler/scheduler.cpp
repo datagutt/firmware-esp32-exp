@@ -40,6 +40,7 @@
 #include "event_bus.h"
 #include "nvs_settings.h"
 #include "ota.h"
+#include "psram_alloc.h"
 #include "raii_utils.hpp"
 #include "remote.h"
 #include "scheduler_fsm.h"
@@ -327,13 +328,8 @@ void http_fetch_worker(void*) {
 // kept for good: HTTP mode fetches every dwell, and recreating an 8 KB task
 // each time only churns the heap.
 bool start_fetch_worker() {
-  BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
-      http_fetch_worker, "http_fetch", 8192, nullptr, 3, &ctx.fetch_task, 0,
-      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (rc != pdPASS) {
-    rc = xTaskCreatePinnedToCore(http_fetch_worker, "http_fetch", 8192,
-                                 nullptr, 3, &ctx.fetch_task, 0);
-  }
+  BaseType_t rc = psram_or_internal_task_create(
+      http_fetch_worker, "http_fetch", 8192, nullptr, 3, &ctx.fetch_task, 0);
   if (rc != pdPASS) {
     ctx.fetch_task = nullptr;
     ESP_LOGE(TAG, "Failed to create HTTP fetch task");

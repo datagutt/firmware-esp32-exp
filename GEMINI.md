@@ -73,6 +73,7 @@ Copy `secrets.json.example` to `secrets.json` before building.
 - **Anonymous namespaces** for file-scoped statics (C++ idiom, no `static` globals)
 - **`extern "C"` guards** in all `.h` files for C/C++ interop
 - **No STL containers** — fixed arrays, `heap_caps_malloc` for PSRAM
+- **Task stacks**: tasks that never touch flash get a PSRAM stack through `psram_or_internal_task_create` (`system/psram_alloc.h`) and are deleted with `vTaskDeleteWithCaps`. Tasks that read or write NVS (including `diag_event_log`), OTA or other partitions keep internal stacks, because flash access disables the cache that PSRAM sits behind.
 - **No exceptions / RTTI** (ESP-IDF default)
 
 ### Dependencies (managed via `idf_component.yml`)

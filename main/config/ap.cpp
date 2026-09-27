@@ -294,7 +294,7 @@ void dns_server_task(void*) {
     s_dns_task_handle = nullptr;
   }
   ESP_LOGI(TAG, "DNS server stopped");
-  vTaskDelete(nullptr);
+  vTaskDeleteWithCaps(nullptr);
 }
 
 void start_dns_server() {
@@ -305,8 +305,9 @@ void start_dns_server() {
       raii::MutexGuard lock(s_dns_mutex);
       if (s_dns_task_handle == nullptr) {
         s_dns_stop_requested.store(false);
-        if (xTaskCreate(dns_server_task, "dns_server", 4096, nullptr, 5,
-                        &s_dns_task_handle) != pdPASS) {
+        if (psram_or_internal_task_create(dns_server_task, "dns_server", 4096,
+                                          nullptr, 5, &s_dns_task_handle,
+                                          tskNO_AFFINITY) != pdPASS) {
           s_dns_task_handle = nullptr;
           ESP_LOGE(TAG, "Failed to create DNS server task");
         }

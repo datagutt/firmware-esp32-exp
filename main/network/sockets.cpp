@@ -20,6 +20,11 @@
 //   - Senders take client_mutex to use the handle. The lifecycle task swaps
 //     ctx.client to nullptr under the lock and destroys the old client
 //     outside it, so senders wait for the swap, not for the destroy.
+//   - On boards with PSRAM both the lifecycle task and the WS task
+//     (CONFIG_ESP_WS_CLIENT_TASK_STACK_IN_EXT_RAM) run on PSRAM stacks, so
+//     nothing either of them runs may touch flash (see psram_alloc.h). Text
+//     messages, which persist settings, are handed to the handlers' consumer
+//     task for that reason.
 
 #include "sockets.h"
 #include "handlers.h"
@@ -30,6 +35,7 @@
 #include <cstring>
 
 #include <esp_crt_bundle.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_netif.h>
 #include <esp_random.h>
@@ -43,10 +49,12 @@
 #include <ping/ping_sock.h>
 
 #include "app_state.h"
+#include "diag_event_ring.h"
 #include "display.h"
 #include "event_bus.h"
 #include "nvs_settings.h"
 #include "outbox_ring.h"
+#include "psram_alloc.h"
 #include "raii_utils.hpp"
 #include "retry_backoff.h"
 #include "scheduler.h"
@@ -92,9 +100,16 @@ constexpr uint32_t GATEWAY_PING_TIMEOUT_MS = 1000;
 constexpr TickType_t OUTBOX_SEND_TIMEOUT = pdMS_TO_TICKS(2000);
 
 // The lifecycle task creates and destroys clients and sends queued messages
-// through TLS. xTaskCreate places the stack in internal RAM.
+// through TLS.
 constexpr uint32_t LIFECYCLE_STACK_SIZE = 4096;
 constexpr UBaseType_t LIFECYCLE_PRIORITY = 5;
+
+// Without the lifecycle task the device never reaches the server, and a new
+// image on trial would then roll back. Creating it can fail while boot-time
+// work holds internal RAM (the TCB is always internal, and so is the stack on
+// boards without PSRAM), so creation is retried until it succeeds.
+constexpr uint32_t LIFECYCLE_START_RETRY_BASE_MS = 1000;
+constexpr uint32_t LIFECYCLE_START_RETRY_MAX_MS = 30000;
 
 // Lifecycle task notification bits.
 constexpr uint32_t NOTIFY_CONNECT = 1u << 0;     // replace the client
@@ -126,6 +141,8 @@ SocketContext ctx;
 SemaphoreHandle_t client_mutex = nullptr;
 
 TaskHandle_t lifecycle_task = nullptr;
+esp_timer_handle_t lifecycle_start_timer = nullptr;
+int lifecycle_start_attempt = 0;
 SemaphoreHandle_t shutdown_done = nullptr;
 // Given by the ping task when a gateway probe ends. Never deleted, because a
 // probe that overruns its wait may still signal it later.
@@ -562,7 +579,7 @@ void lifecycle_task_main(void*) {
     if (bits & NOTIFY_SHUTDOWN) {
       teardown_client();
       xSemaphoreGive(shutdown_done);
-      vTaskDelete(nullptr);
+      vTaskDeleteWithCaps(nullptr);
     }
     if (bits & NOTIFY_SESSION_UP) handle_session_up();
     if ((bits & NOTIFY_FINISHED) && ctx.client) {
@@ -593,6 +610,69 @@ void on_wifi_event(const tronbyt_event_t* event, void*) {
   schedule_connect(GOT_IP_CONNECT_DELAY_US);
 }
 
+// ---------------------------------------------------------------------------
+// Lifecycle task startup
+// ---------------------------------------------------------------------------
+
+bool start_lifecycle_task() {
+  if (psram_or_internal_task_create(lifecycle_task_main, "ws_lifecycle",
+                                    LIFECYCLE_STACK_SIZE, nullptr,
+                                    LIFECYCLE_PRIORITY, &lifecycle_task,
+                                    tskNO_AFFINITY) != pdPASS) {
+    lifecycle_task = nullptr;
+    return false;
+  }
+
+  // Got-IP events that arrived while there was no task to notify were lost,
+  // so the connected state is checked here rather than waited for.
+  if (wifi_is_connected()) {
+    ctx.awaiting_network.store(false);
+    // Defer first connect slightly to let boot-time tasks (including
+    // app_main) release stack/heap before websocket task allocation.
+    schedule_connect(INITIAL_CONNECT_DELAY_US);
+    ESP_LOGI(TAG, "Network ready, deferring initial WS connect by %lld ms",
+             INITIAL_CONNECT_DELAY_US / 1000);
+  } else {
+    ESP_LOGI(TAG, "Waiting for network...");
+  }
+  return true;
+}
+
+void schedule_lifecycle_start_retry() {
+  uint32_t delay_ms = retry_backoff_delay_ms(
+      lifecycle_start_attempt, LIFECYCLE_START_RETRY_BASE_MS,
+      LIFECYCLE_START_RETRY_MAX_MS, esp_random());
+  lifecycle_start_attempt++;
+  size_t largest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  ESP_LOGE(TAG,
+           "Failed to create WS lifecycle task (attempt %d, largest internal "
+           "block %u B), retrying in %lu ms",
+           lifecycle_start_attempt, (unsigned)largest,
+           (unsigned long)delay_ms);
+  diag_event_log("ERROR", "ws_task_create_fail", lifecycle_start_attempt,
+                 "WS lifecycle task could not be created");
+  if (lifecycle_start_timer) {
+    esp_timer_start_once(lifecycle_start_timer,
+                         static_cast<int64_t>(delay_ms) * 1000);
+  }
+}
+
+// Runs on the esp_timer task, whose stack is internal, so the diag event
+// (an NVS write) is allowed here.
+void lifecycle_start_timer_callback(void*) {
+  if (lifecycle_task) return;
+  if (!start_lifecycle_task()) {
+    schedule_lifecycle_start_retry();
+    return;
+  }
+  ESP_LOGI(TAG, "WS lifecycle task created after %d failed attempts",
+           lifecycle_start_attempt);
+  diag_event_log("INFO", "ws_task_created", lifecycle_start_attempt,
+                 "WS lifecycle task created after retrying");
+  lifecycle_start_attempt = 0;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -617,34 +697,30 @@ void sockets_init(const char* url) {
   handlers_init();
   ctx.url = strdup(url);
 
-  if (xTaskCreate(lifecycle_task_main, "ws_lifecycle", LIFECYCLE_STACK_SIZE,
-                  nullptr, LIFECYCLE_PRIORITY, &lifecycle_task) != pdPASS) {
-    lifecycle_task = nullptr;
-    ESP_LOGE(TAG, "Failed to create WS lifecycle task");
-    return;
-  }
-
   esp_timer_create_args_t reconnect_args = {};
   reconnect_args.callback = reconnect_timer_callback;
   reconnect_args.name = "sock_reconn";
   reconnect_args.skip_unhandled_events = true;
   esp_timer_create(&reconnect_args, &reconnect_timer);
 
+  esp_timer_create_args_t start_args = {};
+  start_args.callback = lifecycle_start_timer_callback;
+  start_args.name = "sock_task_retry";
+  esp_timer_create(&start_args, &lifecycle_start_timer);
+
   event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_event, nullptr);
   event_bus_subscribe(TRONBYT_EVENT_WIFI_DISCONNECTED, on_wifi_event, nullptr);
 
-  if (wifi_is_connected() && ctx.awaiting_network.exchange(false)) {
-    // Defer first connect slightly to let boot-time tasks (including
-    // app_main) release stack/heap before websocket task allocation.
-    schedule_connect(INITIAL_CONNECT_DELAY_US);
-    ESP_LOGI(TAG, "Network ready, deferring initial WS connect by %lld ms",
-             INITIAL_CONNECT_DELAY_US / 1000);
-  } else {
-    ESP_LOGI(TAG, "Waiting for network...");
-  }
+  lifecycle_start_attempt = 0;
+  if (!start_lifecycle_task()) schedule_lifecycle_start_retry();
 }
 
 void sockets_deinit() {
+  if (lifecycle_start_timer) {
+    esp_timer_stop(lifecycle_start_timer);
+    esp_timer_delete(lifecycle_start_timer);
+    lifecycle_start_timer = nullptr;
+  }
   if (reconnect_timer) {
     esp_timer_stop(reconnect_timer);
     esp_timer_delete(reconnect_timer);
