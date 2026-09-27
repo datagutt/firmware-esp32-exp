@@ -423,8 +423,6 @@ esp_err_t system_config_post_handler(httpd_req_t* req) {
   }
   if (has_brightness) {
     display_set_brightness(static_cast<uint8_t>(brightness_value));
-    // Announce the change so board-level consumers (e.g. Gen2 touch control)
-    // can resync; keeps this API handler board-agnostic.
     event_bus_emit_i32(TRONBYT_EVENT_BRIGHTNESS_CHANGED, brightness_value);
   }
 

@@ -306,9 +306,6 @@ void process_text_message(const char* json_str) {
   if (has_brightness) {
     display_set_brightness(static_cast<uint8_t>(brightness_value));
     ESP_LOGI(TAG, "Updated brightness to %d", brightness_value);
-    // A server brightness command means the display is on; announce it so any
-    // board-level consumer (e.g. the Gen2 touch controller) can resync its
-    // state. The network layer stays board-agnostic.
     event_bus_emit_i32(TRONBYT_EVENT_BRIGHTNESS_CHANGED, brightness_value);
   }
 

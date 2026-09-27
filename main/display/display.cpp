@@ -208,8 +208,8 @@ static bool hw_setting_save(const char *key, uint8_t value) {
 }
 
 // Rebuild the driver from the current _mxconfig. Quiesces the render pipeline
-// first so nothing is mid-draw when the DMA engine goes away, and restores the
-// scheduler unless something else (quiet hours) had already paused it.
+// first so nothing is mid-draw when the DMA engine goes away. Playback resumes
+// afterwards unless another pause reason (quiet hours, touch-off) is held.
 //
 // The driver object itself is reused (set_config on a stopped driver); only its
 // DMA engine is torn down and rebuilt. Keeping the object means a failed
@@ -217,14 +217,14 @@ static bool hw_setting_save(const char *key, uint8_t value) {
 static bool display_reinit(void) {
   if (_matrix == NULL) return false;
 
-  const bool was_paused = scheduler_is_paused();
-  scheduler_pause();  // stops timers, gfx_stop(), blanks the panel
+  // Stops timers, gfx_stop(), blanks the panel.
+  scheduler_pause(SCHEDULER_PAUSE_DISPLAY_REINIT);
 
   // The player's frame draws do not take _matrix_mutex, so it has to be out
   // of the draw path before the DMA engine goes away.
   if (!gfx_wait_idle()) {
     ESP_LOGE(TAG, "Player still drawing; display re-init skipped");
-    if (!was_paused) scheduler_resume();
+    scheduler_resume(SCHEDULER_PAUSE_DISPLAY_REINIT);
     return false;
   }
 
@@ -265,7 +265,7 @@ static bool display_reinit(void) {
     }
   }
 
-  if (!was_paused) scheduler_resume();
+  scheduler_resume(SCHEDULER_PAUSE_DISPLAY_REINIT);
   return ok;
 }
 
@@ -787,6 +787,14 @@ void display_draw(const uint8_t *pix, int width, int height) {
 void display_clear(void) {
   raii::MutexGuard lock(_matrix_mutex);
   if (lock && _matrix != NULL) _matrix->clear();
+}
+
+void display_blank(void) {
+  raii::MutexGuard lock(_matrix_mutex);
+  if (!lock || _matrix == NULL) return;
+  _matrix->clear();
+  _matrix->flip_buffer();
+  _matrix->clear();
 }
 
 void display_draw_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {

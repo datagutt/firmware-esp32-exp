@@ -16,9 +16,12 @@
 #include "mdns_service.h"
 #include "webui_server.h"
 #include "nvs_settings.h"
+#include "ota.h"
 #include "startup/runtime_orchestrator.h"
 #include "sdkconfig.h"
 #ifdef CONFIG_BOARD_TIDBYT_GEN2
+#include "nvs_handle.h"
+#include "scheduler.h"
 #include "touch_control.h"
 #endif
 #include "version.h"
@@ -35,16 +38,49 @@ const char* TAG = "main";
 bool button_boot = false;
 
 #ifdef CONFIG_BOARD_TIDBYT_GEN2
-// Touch control state
-bool display_power_on = true;
-uint8_t saved_brightness = 30;
+// Switched off by touch. "Off" is a scheduler pause rather than brightness 0:
+// the panel is blanked and playback stops while the brightness level stays
+// whatever the user or server last set. Turning back on restores that level,
+// and a server or API brightness change cannot relight a panel switched off
+// here. Written by app_main before the touch_poll task starts, then only by
+// that task.
+bool s_user_off = false;
+
+// Used when turning on a panel whose level is 0, e.g. dimmed to 0 by the
+// server, or switched off by older firmware that stored brightness 0 for it.
+constexpr uint8_t kTurnOnBrightness = 30;
+
+// Persisted so a device switched off by touch stays off across a reboot.
+constexpr const char* kTouchNvsNamespace = "touch";
+constexpr const char* kTouchNvsKeyUserOff = "user_off";
+
+bool user_off_load() {
+  NvsHandle nvs(kTouchNvsNamespace, NVS_READONLY);
+  uint8_t off = 0;
+  return nvs && nvs.get_u8(kTouchNvsKeyUserOff, &off) == ESP_OK && off != 0;
+}
+
+void set_user_off(bool off) {
+  s_user_off = off;
+  if (off) {
+    scheduler_pause(SCHEDULER_PAUSE_USER_OFF);
+  } else {
+    scheduler_resume(SCHEDULER_PAUSE_USER_OFF);
+  }
+
+  NvsHandle nvs(kTouchNvsNamespace, NVS_READWRITE);
+  if (nvs.set_u8(kTouchNvsKeyUserOff, off ? 1 : 0) != ESP_OK ||
+      nvs.commit() != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to persist display power state");
+  }
+}
 
 void handle_touch_event(touch_event_t event) {
   ESP_LOGI(TAG, "Touch event: %s", touch_event_to_string(event));
 
   switch (event) {
     case TOUCH_EVENT_TAP:
-      if (display_power_on) {
+      if (!s_user_off) {
         ESP_LOGI(TAG, "TAP - skip to next app");
         gfx_interrupt();
       } else {
@@ -58,17 +94,17 @@ void handle_touch_event(touch_event_t event) {
       break;
 
     case TOUCH_EVENT_HOLD:
-      display_power_on = !display_power_on;
-
-      if (display_power_on) {
+      // Toggles what the panel looks like: at brightness 0 it looks off, so a
+      // HOLD turns it on rather than switching it "off" first.
+      if (s_user_off || display_get_brightness() == 0) {
         ESP_LOGI(TAG, "HOLD - Display ON");
-        display_set_brightness(saved_brightness);
-        gfx_start();
+        if (display_get_brightness() == 0) {
+          display_set_brightness(kTurnOnBrightness);
+        }
+        if (s_user_off) set_user_off(false);
       } else {
         ESP_LOGI(TAG, "HOLD - Display OFF");
-        saved_brightness = 30;
-        display_set_brightness(0);
-        gfx_stop();
+        set_user_off(true);
       }
       break;
 
@@ -85,15 +121,6 @@ void touch_task(void*) {
     }
     vTaskDelay(pdMS_TO_TICKS(100));  // 100ms polling, responsive enough for tap/hold
   }
-}
-
-// Resync touch state when brightness is changed externally (a server command
-// routed through the network layer). Subscribed to the event bus only while
-// touch is active, which lets the network layer stay board-agnostic instead of
-// calling into touch control via extern linkage.
-void on_brightness_changed(const tronbyt_event_t* event, void*) {
-  display_power_on = true;
-  saved_brightness = static_cast<uint8_t>(event->payload.i32);
 }
 
 // touch_beep can change at runtime (WebSocket, config portal) and takes effect
@@ -135,6 +162,8 @@ extern "C" void app_main(void) {
   diag_event_ring_init();
   console_init();
   heap_monitor_init();
+  // Before WiFi starts, so no event the health check counts can be missed.
+  ota_start_health_check(config_get().image_url[0] != '\0');
 
   ESP_LOGI(TAG, "Initializing WiFi manager...");
   if (wifi_initialize("", "")) {
@@ -156,16 +185,6 @@ extern "C" void app_main(void) {
   esp_register_shutdown_handler(&display_shutdown);
 
 #ifdef CONFIG_BOARD_TIDBYT_GEN2
-  // Seed the touch state from the brightness display_initialize() just restored
-  // so a device switched off by touch stays off across a reboot, and the first
-  // HOLD after a reboot toggles the way the panel looks rather than the other
-  // way. Brightness 0 keeps the 30% default as the level to come back to.
-  {
-    uint8_t restored = display_get_brightness();
-    display_power_on = restored > 0;
-    if (restored > 0) saved_brightness = restored;
-  }
-
   // Initialize touch controls (GPIO33 on Tidbyt Gen2). Skipping init entirely
   // when disabled also means the touch_poll task is never spawned, so there is
   // no polling overhead.
@@ -179,11 +198,18 @@ extern "C" void app_main(void) {
       event_bus_subscribe(TRONBYT_EVENT_CONFIG_CHANGED, on_config_changed,
                           nullptr);
 
-      xTaskCreate(touch_task, "touch_poll", 2048, nullptr, 2, nullptr);
-      // Touch is active: keep its on/off + saved-brightness state in sync with
-      // server-side brightness commands via the event bus.
-      event_bus_subscribe(TRONBYT_EVENT_BRIGHTNESS_CHANGED,
-                          on_brightness_changed, nullptr);
+      // Only restored while touch works: with touch disabled or broken there
+      // would be no way to turn the panel back on.
+      if (user_off_load()) {
+        ESP_LOGI(TAG, "Display was switched off by touch; keeping it off");
+        s_user_off = true;
+        scheduler_pause(SCHEDULER_PAUSE_USER_OFF);
+      }
+
+      // Internal RAM (xTaskCreate), since a HOLD writes NVS. Sized for the
+      // deepest path: a HOLD that sets the brightness and persists the power
+      // state (NVS write + commit), with log formatting on top.
+      xTaskCreate(touch_task, "touch_poll", 3072, nullptr, 2, nullptr);
     } else {
       ESP_LOGW(TAG, "Touch control init failed: %s (continuing without touch)",
                esp_err_to_name(touch_ret));

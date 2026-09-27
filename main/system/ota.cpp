@@ -23,12 +23,24 @@
 #include "event_bus.h"
 #include "http_slot.h"
 #include "ota_url_utils.h"
+#include "scheduler.h"
 #include "webp_player.h"
 
 namespace {
 
 const char* TAG = "OTA";
 std::atomic<bool> s_ota_in_progress{false};
+// ota_claim() moved the app state to OTA and ota_release() must move it back.
+// Not set when the claim came from the config portal, which has to stay there.
+bool s_claim_entered_ota_state = false;
+
+// Post-update health check. A new image that never proves itself is rolled
+// back, so a bad release cannot strand a device that updates unattended.
+constexpr uint64_t kHealthTimeoutUs = 10ULL * 60 * 1000 * 1000;
+std::atomic<bool> s_health_pending{false};
+bool s_health_needs_server = false;
+esp_timer_handle_t s_confirm_timer = nullptr;
+esp_timer_handle_t s_rollback_timer = nullptr;
 
 bool is_ip_private(const struct sockaddr* addr) {
   if (addr->sa_family == AF_INET) {
@@ -140,37 +152,151 @@ bool validate_and_rewrite_url(const char* url, char* out_url,
   return true;
 }
 
+// Pending verify only on the first boot of a new OTA image. Factory and
+// USB-flashed images report valid or not-supported, so they are left alone.
+bool running_app_pending_verify() {
+  esp_ota_img_states_t state;
+  return esp_ota_get_state_partition(esp_ota_get_running_partition(),
+                                     &state) == ESP_OK &&
+         state == ESP_OTA_IMG_PENDING_VERIFY;
+}
+
+// Both timer callbacks write otadata, so they run on the esp_timer task
+// (internal stack) and never on the event bus task, whose stack may be PSRAM.
+// Sharing that task also serializes confirm against rollback.
+void confirm_timer_cb(void*) {
+  if (!s_health_pending.exchange(false)) return;
+  if (s_rollback_timer) esp_timer_stop(s_rollback_timer);
+  if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+    ESP_LOGI(TAG, "OTA image confirmed valid; rollback cancelled");
+    diag_event_log("INFO", "ota_confirmed", 0, "App marked valid after boot");
+  } else {
+    ESP_LOGE(TAG, "Failed to mark OTA app valid");
+    diag_event_log("ERROR", "ota_confirm_fail", -1, "mark_app_valid failed");
+  }
+}
+
+void rollback_timer_cb(void*) {
+  if (!s_health_pending.load()) return;
+  ESP_LOGE(TAG, "New firmware not confirmed healthy within %llu s; rolling back",
+           kHealthTimeoutUs / 1000000ULL);
+  diag_event_log("ERROR", "ota_rollback", 0,
+                 "Health check timed out; rolling back");
+  esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
+  // Only returns on failure. Keep running the new image rather than retrying
+  // a rollback that cannot happen.
+  ESP_LOGE(TAG, "Rollback failed: %s", esp_err_to_name(err));
+  diag_event_log("ERROR", "ota_rollback_fail", err, esp_err_to_name(err));
+}
+
+// With a server configured, the new image must reach it: a WebSocket session,
+// or any HTTP status from a poll (a 4xx is a server-side problem that a
+// rollback would not fix). Without one there is nothing to reach yet, so an IP
+// on WiFi is enough; otherwise a device updated through the web UI before it
+// was pointed at a server would roll back on every such update. The config
+// portal counts too: someone is setting the device up, and it is also the path
+// to upload another image.
+void on_health_event(const tronbyt_event_t* event, void*) {
+  if (!event || !s_health_pending.load()) return;
+  bool healthy = false;
+  switch (event->type) {
+    case TRONBYT_EVENT_WS_CONNECTED:
+    case TRONBYT_EVENT_SERVER_RESPONDED:
+      healthy = true;
+      break;
+    case TRONBYT_EVENT_WIFI_CONNECTED:
+      healthy = !s_health_needs_server;
+      break;
+    case TRONBYT_EVENT_STATE_CHANGED:
+      healthy = event->payload.i32 == APP_STATE_CONFIG_PORTAL;
+      break;
+    default:
+      break;
+  }
+  if (healthy && s_confirm_timer) esp_timer_start_once(s_confirm_timer, 0);
+}
+
+void show_ota_screen() {
+  display_clear();
+  display_text("OTA Update", 2, 10, 0, 0, 255, 1);
+  display_flip();
+}
+
+// The failure paths of run_ota(). Leaves the claim and resumes playback.
+void fail_update() {
+  app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
+  app_state_enter_normal();
+  display_clear();
+  display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
+  display_flip();
+  vTaskDelay(pdMS_TO_TICKS(2000));
+  s_ota_in_progress.store(false);
+  scheduler_resume(SCHEDULER_PAUSE_OTA);
+}
+
 }  // namespace
 
 bool ota_in_progress(void) { return s_ota_in_progress.load(); }
 
-// Marks the running app valid IFF it is in the pending-verify state (i.e. this
-// boot is the first boot after an OTA). No-op on factory/already-valid apps, so
-// it is safe on the 4MB factory-only board and on USB-flashed images.
-void ota_confirm_running_app(void) {
-  const esp_partition_t* running = esp_ota_get_running_partition();
-  esp_ota_img_states_t state;
-  if (esp_ota_get_state_partition(running, &state) != ESP_OK) return;
-  if (state == ESP_OTA_IMG_PENDING_VERIFY) {
-    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-      ESP_LOGI(TAG, "OTA image confirmed valid; rollback cancelled");
-      diag_event_log("INFO", "ota_confirmed", 0, "App marked valid after boot");
-    } else {
-      ESP_LOGE(TAG, "Failed to mark OTA app valid");
-      diag_event_log("ERROR", "ota_confirm_fail", -1, "mark_app_valid failed");
-    }
+bool ota_claim(void) {
+  bool expected = false;
+  if (!s_ota_in_progress.compare_exchange_strong(expected, true)) {
+    ESP_LOGW(TAG, "OTA already in progress");
+    return false;
   }
+  s_claim_entered_ota_state = app_state_enter_ota() == ESP_OK;
+  scheduler_pause(SCHEDULER_PAUSE_OTA);
+  show_ota_screen();
+  return true;
 }
 
-void ota_schedule_health_confirm(uint32_t delay_ms) {
-  static esp_timer_handle_t s_confirm_timer = nullptr;
-  if (s_confirm_timer) return;  // once
-  esp_timer_create_args_t args = {};
-  args.callback = [](void*) { ota_confirm_running_app(); };
-  args.name = "ota_confirm";
-  if (esp_timer_create(&args, &s_confirm_timer) == ESP_OK) {
-    esp_timer_start_once(s_confirm_timer, (uint64_t)delay_ms * 1000);
+void ota_release(void) {
+  if (s_claim_entered_ota_state) {
+    app_state_enter_normal();
+    s_claim_entered_ota_state = false;
   }
+  s_ota_in_progress.store(false);
+  scheduler_resume(SCHEDULER_PAUSE_OTA);
+}
+
+void ota_start_health_check(bool server_configured) {
+  if (s_confirm_timer || !running_app_pending_verify()) return;
+
+  s_health_needs_server = server_configured;
+
+  esp_timer_create_args_t confirm_args = {};
+  confirm_args.callback = confirm_timer_cb;
+  confirm_args.name = "ota_confirm";
+  if (esp_timer_create(&confirm_args, &s_confirm_timer) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to create OTA confirm timer");
+    return;
+  }
+
+  // Without another valid image there is nothing to roll back to; still
+  // confirm once healthy so the bootloader stops treating this boot as a trial.
+  if (esp_ota_check_rollback_is_possible()) {
+    esp_timer_create_args_t rollback_args = {};
+    rollback_args.callback = rollback_timer_cb;
+    rollback_args.name = "ota_rollback";
+    if (esp_timer_create(&rollback_args, &s_rollback_timer) == ESP_OK) {
+      esp_timer_start_once(s_rollback_timer, kHealthTimeoutUs);
+    }
+  } else {
+    ESP_LOGW(TAG, "No previous image to roll back to");
+  }
+
+  s_health_pending.store(true);
+  event_bus_subscribe(TRONBYT_EVENT_WS_CONNECTED, on_health_event, nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_SERVER_RESPONDED, on_health_event,
+                      nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_health_event, nullptr);
+  event_bus_subscribe(TRONBYT_EVENT_STATE_CHANGED, on_health_event, nullptr);
+
+  ESP_LOGW(TAG,
+           "First boot of new firmware: confirming once %s, rolling back "
+           "after %llu s otherwise",
+           server_configured ? "the server is reached" : "WiFi connects",
+           kHealthTimeoutUs / 1000000ULL);
 }
 
 void run_ota(const char* url) {
@@ -212,13 +338,13 @@ void run_ota(const char* url) {
   ota_config.partial_http_download = true;
 #endif
 
-  gfx_stop();
-  vTaskDelay(pdMS_TO_TICKS(100));
+  // Through the scheduler rather than gfx_stop() alone, so nothing queues
+  // images or restarts the player (quiet hours ending) under the update. It
+  // also waits for the player to go idle before the OTA screen is drawn.
+  scheduler_pause(SCHEDULER_PAUSE_OTA);
+  show_ota_screen();
 
-  display_clear();
-  display_text("OTA Update", 2, 10, 0, 0, 255, 1);
-  display_flip();
-
+  // The other buffer needs the text too: each progress update flips.
   display_clear();
   display_text("OTA Update", 2, 10, 0, 0, 255, 1);
 
@@ -233,14 +359,7 @@ void run_ota(const char* url) {
     ESP_LOGE(TAG, "Could not acquire HTTP slot for OTA; aborting update");
     diag_event_log("ERROR", "ota_slot_busy", -1,
                    "OTA aborted: shared HTTP slot stayed busy");
-    app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
-    app_state_enter_normal();
-    display_clear();
-    display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
-    display_flip();
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    s_ota_in_progress.store(false);
-    gfx_start();
+    fail_update();
     return;
   }
 
@@ -334,14 +453,7 @@ void run_ota(const char* url) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "OTA Update failed: %s", esp_err_to_name(err));
     diag_event_log("ERROR", "ota_perform_fail", err, esp_err_to_name(err));
-    app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
-    app_state_enter_normal();
-    display_clear();
-    display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
-    display_flip();
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    s_ota_in_progress.store(false);
-    gfx_start();
+    fail_update();
   } else {
     app_state_set_ota_substate(OTA_SUBSTATE_VERIFYING);
     err = esp_https_ota_finish(https_ota_handle);
@@ -354,14 +466,7 @@ void run_ota(const char* url) {
     } else {
       ESP_LOGE(TAG, "OTA Finish failed: %s", esp_err_to_name(err));
       diag_event_log("ERROR", "ota_finish_fail", err, esp_err_to_name(err));
-      app_state_set_ota_substate(OTA_SUBSTATE_FAILED);
-      app_state_enter_normal();
-      display_clear();
-      display_text("OTA Fail", 2, 10, 255, 0, 0, 1);
-      display_flip();
-      vTaskDelay(pdMS_TO_TICKS(2000));
-      s_ota_in_progress.store(false);
-      gfx_start();
+      fail_update();
     }
   }
 }

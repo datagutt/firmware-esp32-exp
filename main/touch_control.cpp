@@ -63,6 +63,8 @@ struct TouchState {
 
 TouchState g_touch;
 std::atomic<bool> s_beep_enabled{false};
+// Logs a failing read once per streak instead of on every 100 ms poll.
+bool s_read_failing = false;
 
 void feedback(beep_kind_t kind) {
   if (s_beep_enabled.load(std::memory_order_relaxed)) {
@@ -74,14 +76,24 @@ uint32_t get_time_ms() {
   return static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
-uint16_t read_touch_filtered() {
+// A failed read yields no value at all: any placeholder would be taken for a
+// touch (it is far from the baseline) and could fire a phantom HOLD.
+bool read_touch_filtered(uint16_t* value) {
   uint32_t data = 0;
   esp_err_t ret = touch_channel_read_data(s_chan_handle, TOUCH_CHAN_DATA_TYPE_SMOOTH, &data);
   if (ret != ESP_OK) {
-    ESP_LOGW(TAG, "Failed to read smooth data: %s", esp_err_to_name(ret));
-    return 65535;
+    if (!s_read_failing) {
+      ESP_LOGW(TAG, "Failed to read smooth data: %s", esp_err_to_name(ret));
+      s_read_failing = true;
+    }
+    return false;
   }
-  return static_cast<uint16_t>(data);
+  if (s_read_failing) {
+    ESP_LOGI(TAG, "Touch reads recovered");
+    s_read_failing = false;
+  }
+  *value = static_cast<uint16_t>(data);
+  return true;
 }
 
 }  // namespace
@@ -167,8 +179,13 @@ touch_event_t touch_control_check(void) {
     return TOUCH_EVENT_NONE;
   }
 
+  // Skip the poll entirely on a read error so neither the baseline nor the
+  // gesture state machine sees a made-up sample.
+  uint16_t value = 0;
+  if (!read_touch_filtered(&value)) {
+    return TOUCH_EVENT_NONE;
+  }
   uint32_t now = get_time_ms();
-  uint16_t value = read_touch_filtered();
 
   // Initialize adaptive baseline on first read
   if (g_touch.adaptive_baseline == 0) {
@@ -277,12 +294,14 @@ void touch_control_calibrate(void) {
   ESP_LOGI(TAG, "Calibrating (don't touch!)...");
 
   // Match official Tidbyt HDK: use maximum of 3 readings
+  // With no successful sample the baseline stays 0 and touch_control_check()
+  // seeds it from its first good read.
   uint16_t max_value = 0;
   constexpr int samples = 3;
 
   for (int i = 0; i < samples; i++) {
-    uint16_t val = read_touch_filtered();
-    if (val > max_value) {
+    uint16_t val = 0;
+    if (read_touch_filtered(&val) && val > max_value) {
       max_value = val;
     }
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -299,7 +318,11 @@ void touch_control_calibrate(void) {
 void touch_control_debug_all_pads(void) {
   ESP_LOGI(TAG, "=== Touch Control Debug ===");
 
-  uint16_t current = read_touch_filtered();
+  uint16_t current = 0;
+  if (!read_touch_filtered(&current)) {
+    ESP_LOGW(TAG, "Touch read failed; no debug data");
+    return;
+  }
   int16_t delta = static_cast<int16_t>(g_touch.adaptive_baseline) - static_cast<int16_t>(current);
 
   ESP_LOGI(TAG, "Main pad (GPIO33): Channel %d", TOUCH_CHANNEL_ID);

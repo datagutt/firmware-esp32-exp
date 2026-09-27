@@ -22,6 +22,10 @@ void display_draw_span(const uint8_t* pix, int x, int y, int width,
                        int canvas_w, int canvas_h);
 bool display_span_supported(int canvas_w, int canvas_h);
 void display_clear(void);
+// Show an all-black frame and clear the other buffer too: with double
+// buffering display_clear() alone leaves the last image on the panel. Only
+// while the player is stopped and idle, or its next frame overdraws this.
+void display_blank(void);
 void display_draw_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b);
 void display_fill_rect(int x, int y, int w, int h, uint8_t r, uint8_t g,
                        uint8_t b);
