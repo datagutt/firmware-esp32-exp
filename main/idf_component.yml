@@ -1,17 +1,20 @@
 dependencies:
-  # koiosdigital fork of espressif 1.7.0: fixes cross-task TLS teardown
-  # use-after-free (senders defer transport aborts to the websocket task)
+  idf:
+    version: ">=6.1"
+  # datagutt fork of espressif 1.8.0 plus upstream master fixes: senders defer
+  # transport aborts to the websocket task (cross-task TLS teardown
+  # use-after-free), and destroy is refused from the websocket task.
   esp_websocket_client:
-    git: https://github.com/koiosdigital/esp_websocket_client.git
-    version: v1.7.1
+    git: https://github.com/datagutt/esp_websocket_client.git
+    version: v1.8.1
   esp-hub75:
     git: https://github.com/datagutt/esp-hub75.git
     # Pinned commit for reproducible builds; bump when the fork advances.
-    # 2265525: runtime-selectable bit depth on every DMA platform, set_config(),
-    # and DMA engine cleanup on begin() failure (on top of bc063a5 internal-RAM
-    # driver allocation).
-    version: 22655254530ffce012b390f8eaeb63b25adf452b
+    # 0868f29: ESP32 I2S clock derived from the real 160 MHz source (requested
+    # speeds are now the actual output clock), on top of 2265525 runtime bit
+    # depth, set_config() and DMA engine cleanup on begin() failure.
+    version: 0868f293cc99d2fb754f8378f0b528f7798e8d7e
     path: components/hub75
-  espressif/cjson: "*"
-  espressif/mdns: "*"
-  joltwallet/littlefs: "*"
+  espressif/cjson: "^1.7.19"
+  espressif/mdns: "^1.13.1"
+  joltwallet/littlefs: "^1.22.3"

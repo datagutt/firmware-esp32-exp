@@ -19,3 +19,10 @@ CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
 # in use. Without it, dynamic buffers free ~13 KB of internal RAM when idle.
 # CONFIG_ESP_WIFI_STATIC_TX_BUFFER is not set
 CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y
+
+# The ESP32 I2S output clock is 160 MHz / (div * 4), so 16 MHz rounds to
+# 13.33 MHz. Paired with a 120 Hz minimum refresh rate this is the panel
+# timing these boards have always shipped with.
+# CONFIG_HUB75_CLK_8MHZ is not set
+CONFIG_HUB75_CLK_16MHZ=y
+CONFIG_HUB75_MIN_REFRESH_RATE=120

@@ -1,2 +1,9 @@
 CONFIG_BOARD_TIDBYT_GEN1=y
 CONFIG_HUB75_CLK_PHASE_INVERTED=y
+
+# The ESP32 I2S output clock is 160 MHz / (div * 4), so 16 MHz rounds to
+# 13.33 MHz. Paired with a 120 Hz minimum refresh rate this is the panel
+# timing these boards have always shipped with.
+# CONFIG_HUB75_CLK_8MHZ is not set
+CONFIG_HUB75_CLK_16MHZ=y
+CONFIG_HUB75_MIN_REFRESH_RATE=120

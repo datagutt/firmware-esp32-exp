@@ -77,7 +77,7 @@ Copy `secrets.json.example` to `secrets.json` before building.
 
 - `esp-hub75` (datagutt/esp-hub75) — HUB75 LED matrix driver
 - `libwebp` (datagutt/libwebp) — WebP decoding with Xtensa PIE
-- `esp_websocket_client` — WebSocket connectivity
+- `esp_websocket_client` (datagutt/esp_websocket_client fork) for WebSocket connectivity
 - `espressif/cjson` — JSON parsing
 - `espressif/mdns` — mDNS service advertisement
 - `joltwallet/littlefs` — LittleFS for WebUI partition
