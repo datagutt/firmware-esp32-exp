@@ -12,6 +12,7 @@
 #include <freertos/task.h>
 
 #include "app_state.h"
+#include "board_caps.h"
 #include "embedded_tz_db.h"
 #include "api_validation.h"
 #include "device_temperature.h"
@@ -20,10 +21,10 @@
 #include "event_bus.h"
 #include "heap_monitor.h"
 #include "http_server.h"
-#include "mdns_service.h"
 #include "ntp.h"
 #include "nvs_settings.h"
 #include "ota_http_upload.h"
+#include "psram_alloc.h"
 #include "quiet_hours.h"
 #include "version.h"
 #include "webp_player.h"
@@ -34,6 +35,48 @@
 namespace {
 
 const char* TAG = "sta_api";
+
+// Largest JSON body accepted by each endpoint, including the terminator.
+constexpr size_t SYSTEM_CONFIG_BODY_MAX = 512;
+constexpr size_t QUIET_HOURS_BODY_MAX = 2048;
+constexpr int BODY_RECV_MAX_TIMEOUTS = 3;
+
+// Reads the whole request body into buf as a NUL-terminated string. A body can
+// arrive over several TCP segments, so httpd_req_recv is called until
+// content_len bytes are in. On failure the error response has already been
+// sent.
+bool recv_body(httpd_req_t* req, char* buf, size_t cap) {
+  size_t total = req->content_len;
+  if (total == 0) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+    return false;
+  }
+  if (total >= cap) {
+    httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Body too large");
+    return false;
+  }
+
+  size_t received = 0;
+  int timeouts = 0;
+  while (received < total) {
+    int ret = httpd_req_recv(req, buf + received, total - received);
+    if (ret == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < BODY_RECV_MAX_TIMEOUTS) {
+      continue;
+    }
+    if (ret <= 0) {
+      if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+        httpd_resp_send_408(req);
+      } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "receive error");
+      }
+      return false;
+    }
+    received += static_cast<size_t>(ret);
+  }
+  buf[received] = '\0';
+  return true;
+}
 
 const char* reset_reason_to_string(esp_reset_reason_t reason) {
   switch (reason) {
@@ -78,7 +121,7 @@ esp_err_t status_handler(httpd_req_t* req) {
   }
 
   cJSON_AddStringToObject(root, "firmware_version", FIRMWARE_VERSION);
-  cJSON_AddStringToObject(root, "board", mdns_board_model());
+  cJSON_AddStringToObject(root, "board", BOARD_MODEL_NAME);
 
   uint8_t mac[6];
   if (wifi_get_mac(mac) == 0) {
@@ -106,6 +149,8 @@ esp_err_t status_handler(httpd_req_t* req) {
                           static_cast<double>(snap.spiram_free));
   cJSON_AddNumberToObject(root, "min_free_heap",
                           static_cast<double>(snap.internal_min));
+  cJSON_AddNumberToObject(root, "internal_largest_block",
+                          static_cast<double>(snap.internal_largest_block));
   cJSON_AddNumberToObject(root, "images_loaded", gfx_get_loaded_counter());
   cJSON_AddBoolToObject(root, "diag_events_enabled",
                         diag_event_ring_is_enabled());
@@ -155,6 +200,11 @@ esp_err_t diag_handler(httpd_req_t* req) {
     cJSON_AddNullToObject(root, "temperature_c");
   }
 
+  heap_snapshot_t snap;
+  heap_monitor_get_snapshot(&snap);
+  cJSON_AddNumberToObject(root, "internal_largest_block",
+                          static_cast<double>(snap.internal_largest_block));
+
   wifi_diag_stats_t wifi_stats = {};
   wifi_get_diag_stats(&wifi_stats);
   cJSON* wifi_obj = cJSON_CreateObject();
@@ -193,6 +243,8 @@ esp_err_t diag_handler(httpd_req_t* req) {
         cJSON_AddNumberToObject(p, "uptime_ms", trend[i].uptime_ms);
         cJSON_AddNumberToObject(p, "internal_free", trend[i].internal_free);
         cJSON_AddNumberToObject(p, "internal_min", trend[i].internal_min);
+        cJSON_AddNumberToObject(p, "internal_largest_block",
+                                trend[i].internal_largest_block);
         cJSON_AddNumberToObject(p, "spiram_free", trend[i].spiram_free);
         cJSON_AddNumberToObject(p, "spiram_min", trend[i].spiram_min);
         cJSON_AddItemToArray(heap_arr, p);
@@ -276,7 +328,7 @@ esp_err_t about_handler(httpd_req_t* req) {
     return ESP_FAIL;
   }
 
-  cJSON_AddStringToObject(root, "model", mdns_board_model());
+  cJSON_AddStringToObject(root, "model", BOARD_MODEL_NAME);
   cJSON_AddStringToObject(root, "type", CONFIG_BRAND_NAME_LOWER);
   cJSON_AddStringToObject(root, "version", app->version);
 
@@ -306,7 +358,12 @@ esp_err_t about_handler(httpd_req_t* req) {
 }
 
 esp_err_t system_config_get_handler(httpd_req_t* req) {
-  auto cfg = config_get();
+  char hostname[MAX_HOSTNAME_LEN + 1];
+  config_get_hostname(hostname, sizeof(hostname));
+  char timezone[NTP_TIMEZONE_MAX_LEN];
+  ntp_get_timezone(timezone, sizeof(timezone));
+  char ntp_server[NTP_SERVER_MAX_LEN];
+  ntp_get_server(ntp_server, sizeof(ntp_server));
 
   cJSON* root = cJSON_CreateObject();
   if (!root) {
@@ -315,9 +372,9 @@ esp_err_t system_config_get_handler(httpd_req_t* req) {
   }
 
   cJSON_AddBoolToObject(root, "auto_timezone", ntp_get_auto_timezone());
-  cJSON_AddStringToObject(root, "timezone", ntp_get_timezone());
-  cJSON_AddStringToObject(root, "ntp_server", ntp_get_server());
-  cJSON_AddStringToObject(root, "hostname", cfg.hostname);
+  cJSON_AddStringToObject(root, "timezone", timezone);
+  cJSON_AddStringToObject(root, "ntp_server", ntp_server);
+  cJSON_AddStringToObject(root, "hostname", hostname);
   cJSON_AddBoolToObject(root, "diag_events_enabled",
                         diag_event_ring_is_enabled());
   cJSON_AddNumberToObject(root, "brightness", display_get_brightness());
@@ -336,18 +393,8 @@ esp_err_t system_config_get_handler(httpd_req_t* req) {
 }
 
 esp_err_t system_config_post_handler(httpd_req_t* req) {
-  char content[512];
-  int ret = httpd_req_recv(req, content, sizeof(content) - 1);
-  if (ret <= 0) {
-    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-      httpd_resp_send_408(req);
-    } else {
-      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                          "receive error");
-    }
-    return ESP_FAIL;
-  }
-  content[ret] = '\0';
+  char content[SYSTEM_CONFIG_BODY_MAX];
+  if (!recv_body(req, content, sizeof(content))) return ESP_FAIL;
 
   cJSON* json = cJSON_Parse(content);
   if (!json) {
@@ -515,20 +562,19 @@ esp_err_t quiet_hours_get_handler(httpd_req_t* req) {
 }
 
 esp_err_t quiet_hours_put_handler(httpd_req_t* req) {
-  char content[512];
-  int ret = httpd_req_recv(req, content, sizeof(content) - 1);
-  if (ret <= 0) {
-    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-      httpd_resp_send_408(req);
-    } else {
-      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
-                          "receive error");
-    }
+  auto* content =
+      static_cast<char*>(psram_or_internal_malloc(QUIET_HOURS_BODY_MAX));
+  if (!content) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
     return ESP_FAIL;
   }
-  content[ret] = '\0';
+  if (!recv_body(req, content, QUIET_HOURS_BODY_MAX)) {
+    free(content);
+    return ESP_FAIL;
+  }
 
   cJSON* json = cJSON_Parse(content);
+  free(content);
   if (!json) {
     diag_event_log("WARN", "json_parse_error", -1,
                    "quiet-hours payload parse failed");

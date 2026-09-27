@@ -41,6 +41,7 @@ void append_trend(const heap_snapshot_t& snapshot) {
   point.uptime_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000ULL);
   point.internal_free = snapshot.internal_free;
   point.internal_min = snapshot.internal_min;
+  point.internal_largest_block = snapshot.internal_largest_block;
   point.spiram_free = snapshot.spiram_free;
   point.spiram_min = snapshot.spiram_min;
 

@@ -35,3 +35,26 @@
 #else
 #define BOARD_HAS_SWAP_COLORS 0
 #endif
+
+// Board model name reported in mDNS TXT records, client_info and the local
+// REST API. Matches the build target name (sdkconfig.defaults.<name>), which
+// is what the server and tooling key on.
+#if defined(CONFIG_BOARD_TIDBYT_GEN1)
+#define BOARD_MODEL_NAME "tidbyt-gen1"
+#elif defined(CONFIG_BOARD_TIDBYT_GEN2)
+#define BOARD_MODEL_NAME "tidbyt-gen2"
+#elif defined(CONFIG_BOARD_TRONBYT_S3)
+#define BOARD_MODEL_NAME "tronbyt-s3"
+#elif defined(CONFIG_BOARD_TRONBYT_S3_WIDE)
+#define BOARD_MODEL_NAME "tronbyt-s3-wide"
+#elif defined(CONFIG_BOARD_PIXOTICKER)
+#define BOARD_MODEL_NAME "pixoticker"
+#elif defined(CONFIG_BOARD_MATRIXPORTAL_S3)
+#define BOARD_MODEL_NAME "matrixportal-s3"
+#elif defined(CONFIG_BOARD_MATRIXPORTAL_S3_WIDE)
+#define BOARD_MODEL_NAME "matrixportal-s3-wide"
+#elif defined(CONFIG_BOARD_WAVESHARE_S3)
+#define BOARD_MODEL_NAME "waveshare-s3"
+#else
+#error "Unknown board: add its model name to board_caps.h"
+#endif

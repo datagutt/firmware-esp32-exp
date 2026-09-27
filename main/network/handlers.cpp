@@ -38,8 +38,12 @@ constexpr int DEFAULT_REFRESH_INTERVAL = CONFIG_REFRESH_INTERVAL_SECONDS;
 
 constexpr int CONSUMER_STACK_SIZE = 6144;
 constexpr int CONSUMER_PRIORITY = 4;
-constexpr int CONFIG_TASK_STACK_SIZE = 4096;
-constexpr int CONFIG_TASK_PRIORITY = 3;
+
+// Work for the consumer task, delivered as task-notification bits so repeated
+// requests coalesce. One task does all of it because internal RAM is scarce
+// and each item is short and rare.
+constexpr uint32_t WORK_TEXT = BIT0;         // s_pending_text holds a message
+constexpr uint32_t WORK_CLIENT_INFO = BIT1;  // send client_info to the server
 
 // Upper bound for one reassembled text (JSON) message. Server commands are a
 // few hundred bytes; the cap bounds what a misbehaving server can make us
@@ -52,7 +56,6 @@ struct TextMsg {
 };
 
 void consumer_task(void*);
-void config_persist_task(void*);
 
 int32_t s_dwell_secs = DEFAULT_REFRESH_INTERVAL;
 uint8_t* s_webp = nullptr;
@@ -73,8 +76,9 @@ TaskHandle_t s_consumer_task = nullptr;
 SemaphoreHandle_t s_text_mutex = nullptr;
 TextMsg s_pending_text = {nullptr, 0};
 uint32_t s_text_replace_count = 0;
-TaskHandle_t s_config_task = nullptr;
-SemaphoreHandle_t s_config_mutex = nullptr;
+// Settings from the last processed message, saved by the consumer after
+// process_text_message returns so the flash write does not stack on top of the
+// JSON handling. Only the consumer task touches these.
 system_config_t s_pending_config = {};
 bool s_pending_config_valid = false;
 
@@ -109,51 +113,9 @@ bool ensure_text_mailbox_initialized() {
   return true;
 }
 
-bool ensure_config_persist_initialized() {
-  if (s_config_mutex && s_config_task) {
-    return true;
-  }
-
-  if (!s_config_mutex) {
-    s_config_mutex = xSemaphoreCreateMutex();
-    if (!s_config_mutex) {
-      ESP_LOGE(TAG, "Failed to create config persist mutex");
-      return false;
-    }
-  }
-
-  if (!s_config_task) {
-    BaseType_t rc = xTaskCreate(config_persist_task, "cfg_persist",
-                                CONFIG_TASK_STACK_SIZE, nullptr,
-                                CONFIG_TASK_PRIORITY, &s_config_task);
-    if (rc != pdPASS) {
-      ESP_LOGE(TAG, "Failed to create config persist task");
-      return false;
-    }
-  }
-
-  return true;
-}
-
 void queue_config_persist(const system_config_t& cfg) {
-  if (!ensure_config_persist_initialized()) {
-    ESP_LOGW(TAG, "Config persist task unavailable, applying synchronously");
-    config_set(&cfg);
-    msg_send_client_info();
-    return;
-  }
-
-  if (xSemaphoreTake(s_config_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
-    ESP_LOGW(TAG, "Config persist mutex busy, applying synchronously");
-    config_set(&cfg);
-    msg_send_client_info();
-    return;
-  }
-
   s_pending_config = cfg;
   s_pending_config_valid = true;
-  xSemaphoreGive(s_config_mutex);
-  xTaskNotifyGive(s_config_task);
 }
 
 void ota_task_entry(void* param) {
@@ -161,31 +123,6 @@ void ota_task_entry(void* param) {
   run_ota(url);
   free(url);
   vTaskDelete(nullptr);
-}
-
-void config_persist_task(void*) {
-  while (true) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    system_config_t cfg = {};
-    bool have_cfg = false;
-    if (s_config_mutex &&
-        xSemaphoreTake(s_config_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-      if (s_pending_config_valid) {
-        cfg = s_pending_config;
-        s_pending_config_valid = false;
-        have_cfg = true;
-      }
-      xSemaphoreGive(s_config_mutex);
-    }
-
-    if (!have_cfg) {
-      continue;
-    }
-
-    config_set(&cfg);
-    msg_send_client_info_now();
-  }
 }
 
 void process_text_message(const char* json_str) {
@@ -454,30 +391,49 @@ void process_text_message(const char* json_str) {
   if (cJSON_IsBool(reboot_item) && cJSON_IsTrue(reboot_item)) {
     ESP_LOGI(TAG, "Reboot command received via WS");
     cJSON_Delete(root);
+    // Settings sent alongside the reboot must reach flash first; the consumer
+    // loop that normally saves them never runs again.
+    if (s_pending_config_valid) {
+      s_pending_config_valid = false;
+      config_set(&s_pending_config);
+    }
     gfx_safe_restart();
   }
 
   cJSON_Delete(root);
 }
 
+// Handles every queued text message, then saves any settings they changed.
+void drain_text_mailbox() {
+  while (true) {
+    TextMsg msg = {nullptr, 0};
+    if (!s_text_mutex) break;
+    if (xSemaphoreTake(s_text_mutex, portMAX_DELAY) != pdTRUE) break;
+    if (s_pending_text.data) {
+      msg = s_pending_text;
+      s_pending_text = {nullptr, 0};
+    }
+    xSemaphoreGive(s_text_mutex);
+
+    if (!msg.data) break;
+    process_text_message(msg.data);
+    free(msg.data);
+
+    if (s_pending_config_valid) {
+      s_pending_config_valid = false;
+      config_set(&s_pending_config);
+      // Echo the stored settings so the server sees what was applied.
+      msg_send_client_info_now();
+    }
+  }
+}
+
 void consumer_task(void*) {
   while (true) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    while (true) {
-      TextMsg msg = {nullptr, 0};
-      if (!s_text_mutex) break;
-      if (xSemaphoreTake(s_text_mutex, portMAX_DELAY) != pdTRUE) break;
-      if (s_pending_text.data) {
-        msg = s_pending_text;
-        s_pending_text = {nullptr, 0};
-      }
-      xSemaphoreGive(s_text_mutex);
-
-      if (!msg.data) break;
-      process_text_message(msg.data);
-      free(msg.data);
-    }
+    uint32_t work = 0;
+    xTaskNotifyWait(0, UINT32_MAX, &work, portMAX_DELAY);
+    if (work & WORK_TEXT) drain_text_mailbox();
+    if (work & WORK_CLIENT_INFO) msg_send_client_info_now();
   }
 }
 
@@ -544,50 +500,36 @@ void text_mailbox_post(char* buf, size_t len) {
   }
   s_pending_text = msg;
   xSemaphoreGive(s_text_mutex);
-  xTaskNotifyGive(s_consumer_task);
+  xTaskNotify(s_consumer_task, WORK_TEXT, eSetBits);
 }
 
 }  // namespace
 
 void handlers_init() {
   if (ensure_text_mailbox_initialized()) {
-    ESP_LOGI("handlers", "Text message mailbox initialized");
-  }
-  if (ensure_config_persist_initialized()) {
-    ESP_LOGI("handlers", "Config persist task initialized");
+    ESP_LOGI(TAG, "Text message mailbox initialized");
   }
 }
 
 void handlers_deinit() {
-  if (s_consumer_task) {
-    vTaskDelete(s_consumer_task);
-    s_consumer_task = nullptr;
-  }
-
-  if (s_text_mutex) {
-    if (xSemaphoreTake(s_text_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-      if (s_pending_text.data) {
-        free(s_pending_text.data);
-        s_pending_text = {nullptr, 0};
-      }
-      xSemaphoreGive(s_text_mutex);
+  // The consumer task is left running: it may be in the middle of a flash
+  // write, and deleting it there would leave NVS locks held forever.
+  if (s_text_mutex &&
+      xSemaphoreTake(s_text_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+    if (s_pending_text.data) {
+      free(s_pending_text.data);
+      s_pending_text = {nullptr, 0};
     }
-    vSemaphoreDelete(s_text_mutex);
-    s_text_mutex = nullptr;
+    xSemaphoreGive(s_text_mutex);
   }
   s_text_replace_count = 0;
   text_rx_reset();
+}
 
-  if (s_config_task) {
-    vTaskDelete(s_config_task);
-    s_config_task = nullptr;
-  }
-
-  if (s_config_mutex) {
-    vSemaphoreDelete(s_config_mutex);
-    s_config_mutex = nullptr;
-  }
-  s_pending_config_valid = false;
+esp_err_t handlers_request_client_info() {
+  if (!s_consumer_task) return ESP_ERR_INVALID_STATE;
+  xTaskNotify(s_consumer_task, WORK_CLIENT_INFO, eSetBits);
+  return ESP_OK;
 }
 
 void handle_text_message(esp_websocket_event_data_t* data) {

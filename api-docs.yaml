@@ -99,6 +99,11 @@ paths:
                   min_free_heap:
                     type: integer
                     description: All-time minimum free internal heap bytes.
+                  internal_largest_block:
+                    type: integer
+                    description: |
+                      Largest contiguous free internal heap block in bytes. Far
+                      below free_heap means the internal heap is fragmented.
                   images_loaded:
                     type: integer
                     description: Number of images currently loaded.
@@ -146,6 +151,9 @@ paths:
                   temperature_c:
                     type: number
                     nullable: true
+                  internal_largest_block:
+                    type: integer
+                    description: Largest contiguous free internal heap block in bytes.
                   wifi:
                     type: object
                     properties:
@@ -169,6 +177,8 @@ paths:
                         internal_free:
                           type: integer
                         internal_min:
+                          type: integer
+                        internal_largest_block:
                           type: integer
                         spiram_free:
                           type: integer
@@ -217,9 +227,11 @@ paths:
                     type: string
                     enum: [success]
         "400":
-          description: Validation error (unknown key, wrong type, or out-of-range value).
+          description: Validation error (unknown key, wrong type, or out-of-range value), or an empty body.
         "408":
           description: Request timeout.
+        "413":
+          description: Request body is 512 bytes or larger.
 
   /api/time/zonedb:
     get:

@@ -2,6 +2,7 @@
 
 #include <esp_err.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_wifi_types.h"
@@ -79,7 +80,18 @@ void wifi_network_note_rssi(const char* ssid, int8_t rssi);
 /// Return a thread-safe copy of the current configuration.
 system_config_t config_get(void);
 
-/// Apply a new configuration and persist it to NVS (atomic save).
+/// Copy the hostname into out (NUL-terminated, truncated to len). Returns the
+/// number of characters written. Thread-safe; use instead of config_get() on
+/// hot paths and small stacks that only need this field.
+size_t config_get_hostname(char* out, size_t len);
+
+/// Single-field reads that avoid copying the whole struct. Thread-safe.
+bool config_get_ap_mode(void);
+bool config_get_prefer_ipv6(void);
+
+/// Apply a new configuration and persist it to NVS. Flash is only written when
+/// the configuration differs from the current one; the generation counter and
+/// TRONBYT_EVENT_CONFIG_CHANGED fire on every call.
 void config_set(const system_config_t* cfg);
 
 /// Return a monotonically-increasing generation counter that increments

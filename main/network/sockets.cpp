@@ -617,8 +617,6 @@ void sockets_init(const char* url) {
   handlers_init();
   ctx.url = strdup(url);
 
-  msg_init();
-
   if (xTaskCreate(lifecycle_task_main, "ws_lifecycle", LIFECYCLE_STACK_SIZE,
                   nullptr, LIFECYCLE_PRIORITY, &lifecycle_task) != pdPASS) {
     lifecycle_task = nullptr;

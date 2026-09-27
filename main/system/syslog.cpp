@@ -13,6 +13,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include "event_bus.h"
 #include "nvs_settings.h"
 #include "raii_utils.hpp"
 
@@ -29,7 +30,11 @@ SemaphoreHandle_t s_log_mutex = nullptr;
 
 char s_host[128] = {0};
 uint16_t s_port = 514;
-char s_hostname[33] = CONFIG_LWIP_LOCAL_HOSTNAME;
+// Cached so the log hook never touches the config store: it runs on whatever
+// task logs (some with small stacks) and may run while that task holds the
+// config mutex. Guarded by s_log_mutex.
+char s_hostname[MAX_HOSTNAME_LEN + 1] = "-";
+bool s_config_subscribed = false;
 
 char s_log_buffer[MAX_SYSLOG_MSG_LEN];
 size_t s_log_len = 0;
@@ -105,10 +110,6 @@ int syslog_vprintf(const char* fmt, va_list args) {
                    "%Y-%m-%dT%H:%M:%S.000Z", &timeinfo);
         }
 
-        snprintf(s_hostname, sizeof(s_hostname), "%s",
-                 config_get().hostname);
-        if (strlen(s_hostname) == 0) strcpy(s_hostname, "-");
-
         int pkt_len =
             snprintf(s_packet_buf, sizeof(s_packet_buf),
                      "<%d>1 %s %s tronbyt - - - %s", pri, time_str,
@@ -129,6 +130,17 @@ int syslog_vprintf(const char* fmt, va_list args) {
   return ret;
 }
 
+void refresh_hostname() {
+  char hostname[sizeof(s_hostname)];
+  if (config_get_hostname(hostname, sizeof(hostname)) == 0) {
+    strcpy(hostname, "-");
+  }
+  raii::MutexGuard lock(s_log_mutex);
+  memcpy(s_hostname, hostname, sizeof(s_hostname));
+}
+
+void on_config_changed(const tronbyt_event_t*, void*) { refresh_hostname(); }
+
 }  // namespace
 
 esp_err_t syslog_init(const char* addr) {
@@ -139,6 +151,12 @@ esp_err_t syslog_init(const char* addr) {
   if (!s_log_mutex) {
     s_log_mutex = xSemaphoreCreateMutex();
   }
+  if (!s_config_subscribed) {
+    s_config_subscribed =
+        event_bus_subscribe(TRONBYT_EVENT_CONFIG_CHANGED, on_config_changed,
+                            nullptr) == ESP_OK;
+  }
+  refresh_hostname();
 
   if (s_enabled) {
     syslog_deinit();

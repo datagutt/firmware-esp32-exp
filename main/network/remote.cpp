@@ -56,6 +56,15 @@ constexpr int16_t BRIGHTNESS_UNSET = -1;
 char s_etag[ETAG_MAX] = {};
 char s_etag_url[ETAG_URL_MAX] = {};
 
+// Poll client kept across remote_get calls so a steady poll reuses one
+// kept-alive connection (or at least resumes the TLS session) instead of
+// paying a full handshake every interval. Same single caller as the ETag
+// cache, so no locking.
+esp_http_client_handle_t s_client = nullptr;
+char s_client_origin[128] = {};
+// True while s_client holds a connection a previous request left open.
+bool s_client_warm = false;
+
 struct RemoteState {
   void* buf;
   size_t len;
@@ -68,6 +77,7 @@ struct RemoteState {
   char* image_url;
   bool reboot_requested;
   bool oversize_detected;
+  bool failed;  // body could not be buffered; the attempt must not succeed
   bool quiet;
   char etag[ETAG_MAX];
 };
@@ -142,6 +152,7 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
                        content_length);
               free(state->buf);
               state->buf = nullptr;
+              state->failed = true;
               err = ESP_ERR_NO_MEM;
               esp_http_client_close(event->client);
               break;
@@ -225,10 +236,15 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
 
         void* resized = psram_or_internal_realloc(state->buf, state->size);
         if (!resized) {
+          // The client ignores a handler's return value, so close the
+          // connection to stop the transfer instead of reading the rest of
+          // the body into nowhere.
           ESP_LOGE(TAG, "Resizing response buffer failed");
           free(state->buf);
           state->buf = nullptr;
+          state->failed = true;
           err = ESP_ERR_NO_MEM;
+          esp_http_client_close(event->client);
           break;
         }
         state->buf = resized;
@@ -272,6 +288,99 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
   return err;
 }
 
+// Clears what an attempt accumulated so the next one starts clean. Returns
+// false if the receive buffer (freed by the callback on a failure) cannot be
+// re-allocated.
+bool reset_attempt_state(RemoteState& state) {
+  state.len = 0;
+  state.expected_len = 0;
+  state.oversize_detected = false;
+  state.failed = false;
+  free(state.ota_url);
+  state.ota_url = nullptr;
+  free(state.image_url);
+  state.image_url = nullptr;
+  state.reboot_requested = false;
+  state.brightness = BRIGHTNESS_UNSET;
+  state.dwell_secs = -1;
+  state.quiet = false;
+  state.etag[0] = '\0';
+
+  if (!state.buf) {
+    state.buf = psram_or_internal_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT);
+    state.size = CONFIG_HTTP_BUFFER_SIZE_DEFAULT;
+    if (!state.buf) {
+      ESP_LOGE(TAG, "couldn't reallocate HTTP receive buffer");
+      return false;
+    }
+  }
+  return true;
+}
+
+void release_client() {
+  if (s_client) {
+    esp_http_client_cleanup(s_client);
+    s_client = nullptr;
+  }
+  s_client_warm = false;
+  s_client_origin[0] = '\0';
+}
+
+// Length of the scheme://host:port prefix of url.
+size_t url_origin_len(const char* url) {
+  const char* host = strstr(url, "://");
+  host = host ? host + 3 : url;
+  return static_cast<size_t>(host + strcspn(host, "/?#") - url);
+}
+
+// Returns the poll client pointed at url, reusing the open connection when the
+// origin is unchanged. A different origin gets a fresh client so neither the
+// socket nor the TLS session of the old server carries over.
+esp_http_client_handle_t acquire_client(const char* url) {
+  size_t origin_len = url_origin_len(url);
+  bool same_origin = s_client && origin_len < sizeof(s_client_origin) &&
+                     strlen(s_client_origin) == origin_len &&
+                     strncmp(s_client_origin, url, origin_len) == 0;
+  if (same_origin && esp_http_client_set_url(s_client, url) == ESP_OK) {
+    return s_client;
+  }
+  release_client();
+
+  esp_http_client_config_t config = {};
+  config.url = url;
+  config.event_handler = http_callback;
+  config.timeout_ms = 20000;
+  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.keep_alive_enable = true;
+  config.save_client_session = true;
+
+  s_client = esp_http_client_init(&config);
+  if (!s_client) return nullptr;
+
+  if (esp_http_client_set_header(s_client, "X-Firmware-Version",
+                                 FIRMWARE_VERSION) != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to set firmware version header");
+  }
+  if (origin_len < sizeof(s_client_origin)) {
+    memcpy(s_client_origin, url, origin_len);
+    s_client_origin[origin_len] = '\0';
+  }
+  return s_client;
+}
+
+// Sets or clears a request header. The client persists across polls, so a
+// header that no longer applies has to be removed explicitly.
+void set_optional_header(esp_http_client_handle_t http, const char* key,
+                         const char* value) {
+  if (value) {
+    if (esp_http_client_set_header(http, key, value) != ESP_OK) {
+      ESP_LOGE(TAG, "Failed to set %s header", key);
+    }
+  } else {
+    esp_http_client_delete_header(http, key);
+  }
+}
+
 }  // namespace
 
 void remote_reset_cache(void) {
@@ -283,6 +392,16 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
                uint8_t* brightness_pct, int32_t* dwell_secs,
                int* return_status_code, char** ota_url, char** image_url,
                bool* reboot_requested) {
+  // Yield to OTA: an update holds the shared TLS slot for its whole download,
+  // so there is no point contending. Skip this poll cycle entirely; the
+  // scheduler retries on its next interval once the update finishes. Drop the
+  // idle poll connection too so its TLS buffers are free for the update.
+  if (ota_in_progress()) {
+    ESP_LOGI(TAG, "OTA in progress, skipping image fetch");
+    release_client();
+    return 1;
+  }
+
   RemoteState state = {
       .buf = psram_or_internal_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT),
       .len = 0,
@@ -295,6 +414,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       .image_url = nullptr,
       .reboot_requested = false,
       .oversize_detected = false,
+      .failed = false,
       .quiet = false,
       .etag = {},
   };
@@ -304,23 +424,13 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
     return 1;
   }
 
-  esp_http_client_config_t config = {};
-  config.url = url;
-  config.event_handler = http_callback;
-  config.user_data = &state;
-  config.timeout_ms = 20000;
-  config.crt_bundle_attach = esp_crt_bundle_attach;
-
   // Read auth config once; API key is stable for the lifetime of this call.
   auto cfg = config_get();
-
-  // Yield to OTA: an update holds the shared TLS slot for its whole download,
-  // so there is no point contending. Skip this poll cycle entirely; the
-  // scheduler retries on its next interval once the update finishes.
-  if (ota_in_progress()) {
-    ESP_LOGI(TAG, "OTA in progress, skipping image fetch");
-    free(state.buf);
-    return 1;
+  char auth_header[MAX_API_KEY_LEN + 8];  // "Bearer " + key
+  const char* auth_value = nullptr;
+  if (cfg.api_key[0] != '\0') {
+    snprintf(auth_header, sizeof(auth_header), "Bearer %s", cfg.api_key);
+    auth_value = auth_header;
   }
 
   for (int attempt = 0; attempt < REMOTE_MAX_ATTEMPTS; ++attempt) {
@@ -328,38 +438,14 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       uint32_t base   = REMOTE_BACKOFF_MS[attempt];
       uint32_t jitter = base ? (esp_random() % (base / 2 + 1)) : 0;
       vTaskDelay(pdMS_TO_TICKS(base + jitter));
-
-      // Reset per-attempt accumulation state.
-      state.len              = 0;
-      state.expected_len     = 0;
-      state.oversize_detected = false;
-      if (state.ota_url) { free(state.ota_url); state.ota_url = nullptr; }
-      if (state.image_url) { free(state.image_url); state.image_url = nullptr; }
-      state.reboot_requested = false;
-      state.brightness  = BRIGHTNESS_UNSET;
-      state.dwell_secs  = -1;
-      state.quiet       = false;
-      state.etag[0]     = '\0';
-
-      // A previous attempt's callback may have freed the buffer on an OOM/
-      // realloc failure (sets buf to nullptr). Re-allocate so this attempt
-      // starts with a clean receive buffer.
-      if (!state.buf) {
-        state.buf  = psram_or_internal_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT);
-        state.size = CONFIG_HTTP_BUFFER_SIZE_DEFAULT;
-        if (!state.buf) {
-          ESP_LOGE(TAG, "couldn't reallocate HTTP receive buffer");
-          // state.ota_url / state.image_url are nullptr (reset above);
-          // nothing else to free.
-          return 1;
-        }
-      }
+      if (!reset_attempt_state(state)) return 1;
     }
 
     // Hold the shared TLS slot across connect + transfer so this handshake
     // cannot collide with another client's. The guard releases at the end of
     // each loop iteration (before the next attempt's backoff) and on every
-    // return below, always after esp_http_client_cleanup has freed the socket.
+    // return below. The kept-alive connection stays open between polls
+    // without the slot: an idle connection does not handshake.
     http_slot::Guard slot("remote", REMOTE_SLOT_WAIT_MS);
     if (!slot) {
       // Slot stayed busy (an OTA download is likely running). Do not spin
@@ -369,7 +455,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       break;
     }
 
-    esp_http_client_handle_t http = esp_http_client_init(&config);
+    esp_http_client_handle_t http = acquire_client(url);
     if (!http) {
       // Re-create fails on this attempt; treat as transient and retry.
       ESP_LOGW(TAG, "HTTP client init failed (attempt %d/%d)",
@@ -377,51 +463,68 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       continue;
     }
 
-    if (esp_http_client_set_header(http, "X-Firmware-Version",
-                                   FIRMWARE_VERSION) != ESP_OK) {
-      ESP_LOGE(TAG, "Failed to set firmware version header");
-    }
-
-    if (cfg.api_key[0] != '\0') {
-      char auth_header[MAX_API_KEY_LEN + 8];  // "Bearer " + key
-      snprintf(auth_header, sizeof(auth_header), "Bearer %s", cfg.api_key);
-      ESP_LOGD(TAG, "Using Authorization Bearer header");
-      if (esp_http_client_set_header(http, "Authorization",
-                                     auth_header) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set Authorization header");
-      }
-    }
-
+    esp_http_client_set_user_data(http, &state);
+    esp_http_client_reset_redirect_counter(http);
+    set_optional_header(http, "Authorization", auth_value);
     // Conditional GET: with the cached validator the server can answer 304
     // and the device skips the download and re-decode of unchanged content.
-    if (s_etag[0] != '\0' && strcmp(s_etag_url, url) == 0) {
-      if (esp_http_client_set_header(http, "If-None-Match", s_etag) !=
-          ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set If-None-Match header");
-      }
-    }
+    bool use_etag = s_etag[0] != '\0' && strcmp(s_etag_url, url) == 0;
+    set_optional_header(http, "If-None-Match", use_etag ? s_etag : nullptr);
 
+    bool reused = s_client_warm;
     esp_err_t err = esp_http_client_perform(http);
-
-    if (err != ESP_OK) {                     // connection / TLS / timeout
-      ESP_LOGW(TAG, "fetch attempt %d/%d failed: %s", attempt + 1,
-               REMOTE_MAX_ATTEMPTS, esp_err_to_name(err));
-      esp_http_client_cleanup(http);
-      continue;                              // transient -> retry
+    if (err != ESP_OK && reused && !state.oversize_detected) {
+      // The server may close a kept-alive connection while it sits idle
+      // between polls, which only shows up when the next request fails.
+      // Reconnect right away (resuming the TLS session) instead of spending
+      // an attempt and a backoff on it.
+      ESP_LOGD(TAG, "Kept-alive connection was closed, reconnecting");
+      esp_http_client_close(http);
+      if (!reset_attempt_state(state)) {
+        release_client();
+        return 1;
+      }
+      err = esp_http_client_perform(http);
     }
+    s_client_warm = false;
 
+    // Checked before err: aborting the transfer can make perform fail too.
     if (state.oversize_detected) {           // fatal: never retry
       ESP_LOGI(TAG, "Request aborted due to oversize content");
       *return_status_code = 413;
-      esp_http_client_cleanup(http);
+      release_client();
       free(state.buf);                       // safe even if nullptr (OOM path)
       free(state.ota_url);
       free(state.image_url);
       return 1;
     }
 
-    int status_code       = esp_http_client_get_status_code(http);
-    *return_status_code   = status_code;
+    if (err != ESP_OK) {                     // connection / TLS / timeout
+      ESP_LOGW(TAG, "fetch attempt %d/%d failed: %s", attempt + 1,
+               REMOTE_MAX_ATTEMPTS, esp_err_to_name(err));
+      release_client();
+      continue;                              // transient -> retry
+    }
+
+    int status_code = esp_http_client_get_status_code(http);
+
+    // A body that could not be buffered, or that ended before its declared
+    // length, must not count as a success: the image would not be shown and a
+    // cached ETag would then make every later poll answer 304.
+    bool body_incomplete =
+        status_code == 200 &&
+        (state.failed || !state.buf ||
+         (state.expected_len > 0 && state.len < state.expected_len));
+    if (body_incomplete) {
+      ESP_LOGW(TAG, "incomplete response body (%zu of %zu bytes, attempt %d/%d)",
+               state.len, state.expected_len, attempt + 1,
+               REMOTE_MAX_ATTEMPTS);
+      release_client();
+      continue;                              // transient -> retry
+    }
+
+    *return_status_code = status_code;
+    s_client_warm = true;
 
     if (status_code == 200) {               // success: transfer buffer ownership
       // Feed the server quiet signal into the OR-combined quiet-hours engine.
@@ -443,7 +546,6 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       *ota_url = state.ota_url;
       *image_url = state.image_url;
       *reboot_requested = state.reboot_requested;
-      esp_http_client_cleanup(http);
       return 0;
     }
 
@@ -459,14 +561,12 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       *ota_url = state.ota_url;
       *image_url = state.image_url;
       *reboot_requested = state.reboot_requested;
-      esp_http_client_cleanup(http);
       free(state.buf);
       return 0;
     }
 
     ESP_LOGW(TAG, "HTTP status %d (attempt %d/%d)", status_code,
              attempt + 1, REMOTE_MAX_ATTEMPTS);
-    esp_http_client_cleanup(http);
 
     if (!http_status_is_transient(status_code)) {  // 4xx (not 408/429): fatal
       free(state.buf);

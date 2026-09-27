@@ -1,6 +1,7 @@
 #include "ntp.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 
@@ -9,6 +10,7 @@
 #include <esp_log.h>
 #include <esp_sntp.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <nvs.h>
 #include <nvs_flash.h>
@@ -16,6 +18,7 @@
 #include "embedded_tz_db.h"
 #include "event_bus.h"
 #include "http_slot.h"
+#include "raii_utils.hpp"
 
 namespace {
 
@@ -33,9 +36,17 @@ constexpr int TZ_FETCH_MAX_RETRIES = 2;
 constexpr int TZ_FETCH_RETRY_DELAY_MS = 3000;
 
 bool s_initialized = false;
-bool s_synced = false;
+std::atomic<bool> s_synced{false};
+std::atomic<bool> s_wifi_up{false};
 std::atomic<bool> s_tz_fetch_in_progress{false};
+// The geolocated zone does not change while the device stays put, so one
+// successful lookup per boot is enough; reconnects reuse it.
+std::atomic<bool> s_tz_resolved{false};
 
+// Guards s_config, which the event bus task, the TZ fetch task and the HTTP
+// API all touch. Created in ntp_init; before that everything runs on one task
+// and MutexGuard treats the null handle as unlocked.
+SemaphoreHandle_t s_mutex = nullptr;
 ntp_config_t s_config = {
     .auto_timezone = true,
     .fetch_tz_on_boot = true,
@@ -66,7 +77,9 @@ void load_config_from_nvs() {
   nvs_close(h);
 }
 
-void save_config_to_nvs() {
+// Caller holds s_mutex, which keeps concurrent saves in order. Callers only
+// save after an actual change.
+void save_config_locked() {
   nvs_handle_t h;
   esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &h);
   if (err != ESP_OK) {
@@ -87,22 +100,27 @@ void save_config_to_nvs() {
 
 // ── Timezone helpers ───────────────────────────────────────────────
 
-void apply_timezone_local() {
+// Caller holds s_mutex.
+void apply_timezone_locked() {
   const char* posix = tz_db_get_posix_str(s_config.timezone);
   if (!posix) posix = "UTC0";
   setenv("TZ", posix, 1);
   tzset();
 }
 
-void apply_timezone_from_name(const char* name) {
+// Applies a geolocated zone unless the user switched to a manual zone while
+// the lookup was running.
+void apply_fetched_timezone(const char* name) {
   if (!name || name[0] == '\0') return;
 
-  ESP_LOGI(TAG, "Applying timezone: %s", name);
-  strncpy(s_config.timezone, name, sizeof(s_config.timezone) - 1);
-  s_config.timezone[sizeof(s_config.timezone) - 1] = '\0';
+  raii::MutexGuard lock(s_mutex);
+  if (!s_config.auto_timezone) return;
+  if (strcmp(s_config.timezone, name) == 0) return;
 
-  save_config_to_nvs();
-  apply_timezone_local();
+  ESP_LOGI(TAG, "Applying timezone: %s", name);
+  snprintf(s_config.timezone, sizeof(s_config.timezone), "%s", name);
+  save_config_locked();
+  apply_timezone_locked();
 }
 
 // ── Timezone fetch from IP geolocation ─────────────────────────────
@@ -202,7 +220,8 @@ bool fetch_timezone_from_api() {
 
   ESP_LOGI(TAG, "Fetched timezone from IP geolocation: %s",
            tz->valuestring);
-  apply_timezone_from_name(tz->valuestring);
+  apply_fetched_timezone(tz->valuestring);
+  s_tz_resolved.store(true);
 
   cJSON_Delete(root);
   return true;
@@ -235,6 +254,19 @@ void spawn_tz_fetch_task() {
   }
 }
 
+// Starts a geolocation lookup when auto timezone wants one and it has not
+// already succeeded this boot.
+void maybe_fetch_timezone() {
+  bool wanted;
+  {
+    raii::MutexGuard lock(s_mutex);
+    wanted = s_config.auto_timezone && s_config.fetch_tz_on_boot;
+  }
+  if (wanted && s_wifi_up.load() && !s_tz_resolved.load()) {
+    spawn_tz_fetch_task();
+  }
+}
+
 // ── SNTP ───────────────────────────────────────────────────────────
 
 void time_sync_callback(struct timeval* tv) {
@@ -251,7 +283,9 @@ void time_sync_callback(struct timeval* tv) {
   event_bus_emit_simple(TRONBYT_EVENT_TIME_SYNCED);
 }
 
-void start_sntp() {
+// Caller holds s_mutex. SNTP keeps the server name pointer, so it must point
+// at s_config, which outlives the SNTP client.
+void start_sntp_locked() {
   if (esp_sntp_enabled()) {
     esp_sntp_stop();
   }
@@ -271,13 +305,15 @@ void start_sntp() {
 
 void on_wifi_event(const tronbyt_event_t* event, void*) {
   if (event->type == TRONBYT_EVENT_WIFI_CONNECTED) {
-    apply_timezone_local();
-    start_sntp();
-
-    if (s_config.auto_timezone && s_config.fetch_tz_on_boot) {
-      spawn_tz_fetch_task();
+    s_wifi_up.store(true);
+    {
+      raii::MutexGuard lock(s_mutex);
+      apply_timezone_locked();
+      start_sntp_locked();
     }
+    maybe_fetch_timezone();
   } else if (event->type == TRONBYT_EVENT_WIFI_DISCONNECTED) {
+    s_wifi_up.store(false);
     s_synced = false;
   }
 }
@@ -290,12 +326,16 @@ void ntp_init() {
   if (s_initialized) return;
   s_initialized = true;
 
-  load_config_from_nvs();
+  s_mutex = xSemaphoreCreateMutex();
+  if (!s_mutex) {
+    ESP_LOGE(TAG, "Failed to create NTP config mutex");
+  }
 
-  const char* posix = tz_db_get_posix_str(s_config.timezone);
-  if (!posix) posix = "UTC0";
-  setenv("TZ", posix, 1);
-  tzset();
+  load_config_from_nvs();
+  {
+    raii::MutexGuard lock(s_mutex);
+    apply_timezone_locked();
+  }
 
   event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_event, nullptr);
   event_bus_subscribe(TRONBYT_EVENT_WIFI_DISCONNECTED, on_wifi_event, nullptr);
@@ -309,63 +349,104 @@ void ntp_sync() {
   if (esp_sntp_enabled()) {
     esp_sntp_restart();
   } else {
-    start_sntp();
+    raii::MutexGuard lock(s_mutex);
+    start_sntp_locked();
   }
 }
 
-ntp_config_t ntp_get_config() { return s_config; }
+ntp_config_t ntp_get_config() {
+  raii::MutexGuard lock(s_mutex);
+  return s_config;
+}
 
 void ntp_set_config(const ntp_config_t* config) {
   if (!config) return;
 
-  s_config = *config;
-  save_config_to_nvs();
-  apply_timezone_local();
-
-  if (esp_sntp_enabled()) {
-    start_sntp();
+  {
+    raii::MutexGuard lock(s_mutex);
+    if (memcmp(&s_config, config, sizeof(s_config)) == 0) return;
+    s_config = *config;
+    save_config_locked();
+    apply_timezone_locked();
+    if (esp_sntp_enabled()) {
+      start_sntp_locked();
+    }
   }
+  s_tz_resolved.store(false);
+  maybe_fetch_timezone();
 }
 
 void ntp_set_auto_timezone(bool enabled) {
-  if (s_config.auto_timezone == enabled) return;
-  s_config.auto_timezone = enabled;
-  if (s_initialized) save_config_to_nvs();
+  {
+    raii::MutexGuard lock(s_mutex);
+    if (s_config.auto_timezone == enabled) return;
+    s_config.auto_timezone = enabled;
+    if (s_initialized) save_config_locked();
+  }
+  if (enabled) {
+    s_tz_resolved.store(false);
+    maybe_fetch_timezone();
+  }
 }
 
-bool ntp_get_auto_timezone() { return s_config.auto_timezone; }
+bool ntp_get_auto_timezone() {
+  raii::MutexGuard lock(s_mutex);
+  return s_config.auto_timezone;
+}
 
 void ntp_set_fetch_tz_on_boot(bool enabled) {
+  raii::MutexGuard lock(s_mutex);
+  if (s_config.fetch_tz_on_boot == enabled) return;
   s_config.fetch_tz_on_boot = enabled;
-  if (s_initialized) save_config_to_nvs();
+  if (s_initialized) save_config_locked();
 }
 
-bool ntp_get_fetch_tz_on_boot() { return s_config.fetch_tz_on_boot; }
+bool ntp_get_fetch_tz_on_boot() {
+  raii::MutexGuard lock(s_mutex);
+  return s_config.fetch_tz_on_boot;
+}
 
 void ntp_set_timezone(const char* timezone) {
   if (!timezone) return;
 
-  strncpy(s_config.timezone, timezone, sizeof(s_config.timezone) - 1);
-  s_config.timezone[sizeof(s_config.timezone) - 1] = '\0';
+  raii::MutexGuard lock(s_mutex);
+  if (!s_config.auto_timezone &&
+      strncmp(s_config.timezone, timezone, sizeof(s_config.timezone) - 1) ==
+          0) {
+    return;
+  }
+  snprintf(s_config.timezone, sizeof(s_config.timezone), "%s", timezone);
   s_config.auto_timezone = false;
 
-  save_config_to_nvs();
-  apply_timezone_local();
+  save_config_locked();
+  apply_timezone_locked();
 }
 
-const char* ntp_get_timezone() { return s_config.timezone; }
+void ntp_get_timezone(char* out, size_t len) {
+  if (!out || len == 0) return;
+  raii::MutexGuard lock(s_mutex);
+  snprintf(out, len, "%s", s_config.timezone);
+}
 
 void ntp_set_server(const char* server) {
   if (!server) return;
 
-  strncpy(s_config.ntp_server, server, sizeof(s_config.ntp_server) - 1);
-  s_config.ntp_server[sizeof(s_config.ntp_server) - 1] = '\0';
+  raii::MutexGuard lock(s_mutex);
+  if (strncmp(s_config.ntp_server, server, sizeof(s_config.ntp_server) - 1) ==
+      0) {
+    return;
+  }
+  snprintf(s_config.ntp_server, sizeof(s_config.ntp_server), "%s", server);
 
-  save_config_to_nvs();
+  save_config_locked();
 
   if (esp_sntp_enabled()) {
-    start_sntp();
+    start_sntp_locked();
   }
 }
 
-const char* ntp_get_server() { return s_config.ntp_server; }
+void ntp_get_server(char* out, size_t len) {
+  if (!out || len == 0) return;
+  raii::MutexGuard lock(s_mutex);
+  snprintf(out, len, "%s", s_config.ntp_server);
+}

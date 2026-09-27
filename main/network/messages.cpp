@@ -5,9 +5,9 @@
 #include <cJSON.h>
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
-#include "mdns_service.h"
+#include "board_caps.h"
+#include "handlers.h"
 #include "nvs_settings.h"
 #include "sockets.h"
 #include "version.h"
@@ -18,15 +18,6 @@ namespace {
 const char* TAG = "messages";
 
 constexpr int WEBSOCKET_PROTOCOL_VERSION = 1;
-
-TaskHandle_t s_client_info_task = nullptr;
-
-void client_info_task(void*) {
-  while (true) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    msg_send_client_info_now();
-  }
-}
 
 }  // namespace
 
@@ -46,7 +37,7 @@ esp_err_t msg_send_client_info_now() {
 
   cJSON_AddStringToObject(ci, "firmware_version", FIRMWARE_VERSION);
   cJSON_AddStringToObject(ci, "firmware_type", "ESP32");
-  cJSON_AddStringToObject(ci, "board", mdns_board_model());
+  cJSON_AddStringToObject(ci, "board", BOARD_MODEL_NAME);
   cJSON_AddNumberToObject(ci, "protocol_version", WEBSOCKET_PROTOCOL_VERSION);
 
   if (wifi_get_mac(mac) == 0) {
@@ -98,20 +89,4 @@ esp_err_t msg_send_client_info_now() {
   return ret;
 }
 
-void msg_init() {
-  if (s_client_info_task) return;
-
-  BaseType_t rc =
-      xTaskCreate(client_info_task, "client_info", 4096, nullptr, 4,
-                  &s_client_info_task);
-  if (rc != pdPASS) {
-    s_client_info_task = nullptr;
-    ESP_LOGE(TAG, "Failed to create client info task");
-  }
-}
-
-esp_err_t msg_send_client_info() {
-  if (!s_client_info_task) return ESP_ERR_INVALID_STATE;
-  xTaskNotifyGive(s_client_info_task);
-  return ESP_OK;
-}
+esp_err_t msg_send_client_info() { return handlers_request_client_info(); }

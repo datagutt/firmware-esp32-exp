@@ -18,6 +18,7 @@ typedef struct {
     uint32_t uptime_ms;
     size_t internal_free;
     size_t internal_min;
+    size_t internal_largest_block;
     size_t spiram_free;
     size_t spiram_min;
 } heap_trend_point_t;

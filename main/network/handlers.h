@@ -2,11 +2,16 @@
 
 #include <esp_websocket_client.h>
 
-/// Create the text-message queue and consumer task.
+/// Create the text-message mailbox and the consumer task that processes
+/// server messages, saves the settings they carry and sends client_info.
 void handlers_init();
 
-/// Stop the consumer task and drain the queue.
+/// Drop queued and partially reassembled text messages.
 void handlers_deinit();
+
+/// Ask the consumer task to send client_info. Coalesces with pending requests.
+/// Returns ESP_ERR_INVALID_STATE before handlers_init().
+esp_err_t handlers_request_client_info();
 
 /// Reassemble inbound text (JSON) frame chunks, including continuation
 /// frames, and enqueue each complete message for async processing.

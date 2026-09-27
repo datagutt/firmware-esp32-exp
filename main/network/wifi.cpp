@@ -353,7 +353,7 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
         // Sending an RS triggers an RA containing RDNSS IPv6 addresses;
         // ESP-IDF stores those in dns[0], overwriting the DHCP IPv4 DNS
         // and causing getaddrinfo() to fail at boot.
-        if (config_get().prefer_ipv6) {
+        if (config_get_prefer_ipv6()) {
           ESP_LOGI(TAG, "Connected to AP, creating IPv6 link local address");
           esp_netif_create_ip6_linklocal(s_sta_netif);
         }
@@ -419,7 +419,7 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
                      s_candidates[s_candidate_idx].ssid,
                      s_candidates[s_candidate_idx + 1].ssid);
             connect_to_candidate(s_candidate_idx + 1);
-          } else if (config_get().ap_mode) {
+          } else if (config_get_ap_mode()) {
             ESP_LOGW(TAG, "All %d networks exhausted, raising portal",
                      s_candidate_count);
             give_up_connection(reason);
@@ -431,10 +431,10 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
                      s_candidate_count);
             connect_to_candidate(0);
           }
-        } else if (config_get().ap_mode && bad_credentials) {
+        } else if (config_get_ap_mode() && bad_credentials) {
           ESP_LOGW(TAG, "Stored password rejected, raising portal");
           give_up_connection(reason);
-        } else if (config_get().ap_mode &&
+        } else if (config_get_ap_mode() &&
                    s_reconnect_attempts >= MAX_RECONNECT_ATTEMPTS) {
           ESP_LOGW(TAG, "Maximum reconnection attempts (%d) reached, giving up",
                    MAX_RECONNECT_ATTEMPTS);
@@ -496,7 +496,7 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
 int wifi_initialize(const char* ssid, const char* password) {
   ESP_LOGI(TAG, "Initializing WiFi");
 
-  if (!config_get().ap_mode) {
+  if (!config_get_ap_mode()) {
     ESP_LOGI(TAG, "AP mode disabled via settings");
   }
 

@@ -29,7 +29,7 @@ void invoke_registrars() {
 esp_err_t cors_options_handler(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Methods",
-                     "GET,POST,OPTIONS");
+                     "GET,POST,PUT,OPTIONS");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
   httpd_resp_send(req, nullptr, 0);
   return ESP_OK;

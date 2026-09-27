@@ -4,28 +4,11 @@
 #include <esp_log.h>
 #include <mdns.h>
 
+#include "board_caps.h"
 #include "event_bus.h"
 #include "nvs_settings.h"
 #include "sdkconfig.h"
 #include "wifi.h"
-
-const char* mdns_board_model() {
-#if defined(CONFIG_BOARD_TIDBYT_GEN1)
-  return "tidbyt-gen1";
-#elif defined(CONFIG_BOARD_TIDBYT_GEN2)
-  return "tidbyt-gen2";
-#elif defined(CONFIG_BOARD_TRONBYT_S3)
-  return "tronbyt-s3";
-#elif defined(CONFIG_BOARD_TRONBYT_S3_WIDE)
-  return "tronbyt-s3-wide";
-#elif defined(CONFIG_BOARD_PIXOTICKER)
-  return "pixoticker";
-#elif defined(CONFIG_BOARD_MATRIXPORTAL_S3)
-  return "matrixportal-s3";
-#else
-  return "unknown";
-#endif
-}
 
 namespace {
 
@@ -42,8 +25,9 @@ void start_mdns() {
     return;
   }
 
-  auto cfg = config_get();
-  mdns_hostname_set(cfg.hostname);
+  char hostname[MAX_HOSTNAME_LEN + 1];
+  config_get_hostname(hostname, sizeof(hostname));
+  mdns_hostname_set(hostname);
 
   const esp_app_desc_t* app = esp_app_get_description();
 
@@ -57,7 +41,7 @@ void start_mdns() {
   }
 
   mdns_txt_item_t txt[] = {
-      {"model", mdns_board_model()},
+      {"model", BOARD_MODEL_NAME},
       {"version", app->version},
       {"id", device_id},
   };
@@ -71,7 +55,7 @@ void start_mdns() {
   }
 
   s_running = true;
-  ESP_LOGI(TAG, "mDNS started: %s.local", cfg.hostname);
+  ESP_LOGI(TAG, "mDNS started: %s.local", hostname);
 }
 
 void stop_mdns() {

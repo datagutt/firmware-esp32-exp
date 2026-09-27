@@ -1,5 +1,7 @@
 #include "nvs_settings.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -10,6 +12,7 @@
 #include "event_bus.h"
 #include "nvs_flash.h"
 #include "nvs_handle.h"
+#include "raii_utils.hpp"
 #include "sdkconfig.h"
 
 namespace {
@@ -37,8 +40,8 @@ constexpr bool TOUCH_BEEP_DEFAULT = true;
 constexpr bool TOUCH_BEEP_DEFAULT = false;
 #endif
 
-// Atomic save keys — blob-based config persistence
 constexpr const char* NVS_KEY_CFG_CUR = "cfg";
+// Staging key written by older firmware; only read to recover or clean up.
 constexpr const char* NVS_KEY_CFG_NEW = "cfg_new";
 
 // Multi-network list lives in its own namespace so the main config blob (and
@@ -53,7 +56,12 @@ constexpr int RSSI_PERSIST_DELTA_DB = 5;
 
 system_config_t s_config = {};
 wifi_network_t s_nets[MAX_WIFI_NETS] = {};
+// s_mutex guards s_config, s_nets and s_generation. Config saves hold it only
+// for a memcpy, so readers (including the WiFi event handler and syslog) never
+// wait on a flash write. s_persist_mutex orders config blob writes so NVS ends
+// up with the latest config_set() when two tasks save at once.
 SemaphoreHandle_t s_mutex = nullptr;
+SemaphoreHandle_t s_persist_mutex = nullptr;
 uint32_t s_generation = 0;
 
 #ifndef WIFI_SSID
@@ -66,75 +74,54 @@ uint32_t s_generation = 0;
 #define REMOTE_URL ""
 #endif
 
-/// Atomic save: write to temp key, validate, swap to main key, erase temp.
-/// Caller must hold s_mutex.
-esp_err_t persist_to_nvs() {
+/// Writes cfg as the config blob plus the standalone legacy keys, then commits
+/// once. nvs_set_blob replaces the old value atomically across power loss, so
+/// no staging copy is needed. NVS also skips rewriting any item whose stored
+/// value is identical, so only the fields that actually changed cost flash
+/// wear. Callers serialize through s_persist_mutex and must not hold s_mutex.
+esp_err_t persist_to_nvs(const system_config_t& cfg) {
   NvsHandle nvs(NVS_NAMESPACE, NVS_READWRITE);
   if (!nvs) return nvs.open_error();
 
-  // Step 1: Write config blob to temp key
-  esp_err_t err =
-      nvs.set_blob(NVS_KEY_CFG_NEW, &s_config, sizeof(system_config_t));
+  esp_err_t err = nvs.set_blob(NVS_KEY_CFG_CUR, &cfg, sizeof(cfg));
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write temp config blob: %s",
-             esp_err_to_name(err));
-    return err;
-  }
-  err = nvs.commit();
-  if (err != ESP_OK) return err;
-
-  // Step 2: Read back and validate temp key matches
-  system_config_t verify = {};
-  size_t verify_len = sizeof(verify);
-  err = nvs.get_blob(NVS_KEY_CFG_NEW, &verify, &verify_len);
-  if (err != ESP_OK || verify_len != sizeof(system_config_t) ||
-      memcmp(&verify, &s_config, sizeof(system_config_t)) != 0) {
-    ESP_LOGE(TAG, "Config blob verification failed");
-    nvs.erase_key(NVS_KEY_CFG_NEW);
-    nvs.commit();
-    return ESP_FAIL;
-  }
-
-  // Step 3: Write validated data to main key
-  err = nvs.set_blob(NVS_KEY_CFG_CUR, &s_config, sizeof(system_config_t));
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write main config blob: %s",
-             esp_err_to_name(err));
+    ESP_LOGE(TAG, "Failed to write config blob: %s", esp_err_to_name(err));
     return err;
   }
 
-  // Step 4: Erase temp key and commit
-  nvs.erase_key(NVS_KEY_CFG_NEW);
-  err = nvs.commit();
-
-  // Also persist individual keys for backward compatibility with
-  // existing code that reads them (e.g., on downgrade)
-  nvs.set_str(NVS_KEY_HOSTNAME, s_config.hostname);
-  nvs.set_str(NVS_KEY_SYSLOG_ADDR, s_config.syslog_addr);
-  nvs.set_str(NVS_KEY_SNTP_SERVER, s_config.sntp_server);
-  nvs.set_str(NVS_KEY_IMAGE_URL, s_config.image_url);
-  nvs.set_str(NVS_KEY_API_KEY, s_config.api_key);
-  nvs.set_u8(NVS_KEY_SWAP_COLORS, s_config.swap_colors ? 1 : 0);
+  // Firmware older than the config blob reads only these keys, so they are
+  // kept current to make a downgrade keep the user's settings. touch_beep's
+  // key also marks the blob as carrying a valid touch_beep (see init).
+  nvs.set_str(NVS_KEY_HOSTNAME, cfg.hostname);
+  nvs.set_str(NVS_KEY_SYSLOG_ADDR, cfg.syslog_addr);
+  nvs.set_str(NVS_KEY_SNTP_SERVER, cfg.sntp_server);
+  nvs.set_str(NVS_KEY_IMAGE_URL, cfg.image_url);
+  nvs.set_str(NVS_KEY_API_KEY, cfg.api_key);
+  nvs.set_u8(NVS_KEY_SWAP_COLORS, cfg.swap_colors ? 1 : 0);
   nvs.set_u8(NVS_KEY_WIFI_POWER_SAVE,
-             static_cast<uint8_t>(s_config.wifi_power_save));
-  nvs.set_u8(NVS_KEY_SKIP_VERSION, s_config.skip_display_version ? 1 : 0);
-  nvs.set_u8(NVS_KEY_SKIP_BOOT, s_config.skip_boot_animation ? 1 : 0);
-  nvs.set_u8(NVS_KEY_AP_MODE, s_config.ap_mode ? 1 : 0);
-  nvs.set_u8(NVS_KEY_PREFER_IPV6, s_config.prefer_ipv6 ? 1 : 0);
-  nvs.set_u8(NVS_KEY_DISABLE_TOUCH, s_config.disable_touch ? 1 : 0);
-  nvs.set_u8(NVS_KEY_TOUCH_BEEP, s_config.touch_beep ? 1 : 0);
-  nvs.commit();
+             static_cast<uint8_t>(cfg.wifi_power_save));
+  nvs.set_u8(NVS_KEY_SKIP_VERSION, cfg.skip_display_version ? 1 : 0);
+  nvs.set_u8(NVS_KEY_SKIP_BOOT, cfg.skip_boot_animation ? 1 : 0);
+  nvs.set_u8(NVS_KEY_AP_MODE, cfg.ap_mode ? 1 : 0);
+  nvs.set_u8(NVS_KEY_PREFER_IPV6, cfg.prefer_ipv6 ? 1 : 0);
+  nvs.set_u8(NVS_KEY_DISABLE_TOUCH, cfg.disable_touch ? 1 : 0);
+  nvs.set_u8(NVS_KEY_TOUCH_BEEP, cfg.touch_beep ? 1 : 0);
 
+  err = nvs.commit();
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to commit config: %s", esp_err_to_name(err));
+  }
   return err;
 }
 
-/// Attempt to load config from the atomic blob keys.
-/// Returns true if a valid blob was found and loaded into s_config.
+/// Load config from the blob key. Returns true if a valid blob was found and
+/// loaded into s_config.
 bool load_from_blob() {
   NvsHandle nvs(NVS_NAMESPACE, NVS_READWRITE);
   if (!nvs) return false;
 
-  // Check for interrupted save: if temp key exists but main doesn't, recover
+  // Older firmware staged each save under a temp key first. If one of those
+  // saves was interrupted before the main key existed, recover from it.
   system_config_t temp = {};
   size_t temp_len = sizeof(temp);
   bool has_temp =
@@ -199,7 +186,8 @@ void load_nets() {
 
 esp_err_t nvs_settings_init(void) {
   s_mutex = xSemaphoreCreateMutex();
-  if (!s_mutex) return ESP_ERR_NO_MEM;
+  s_persist_mutex = xSemaphoreCreateMutex();
+  if (!s_mutex || !s_persist_mutex) return ESP_ERR_NO_MEM;
 
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
@@ -344,7 +332,7 @@ esp_err_t nvs_settings_init(void) {
   }
 
   if (save_cfg_defaults) {
-    persist_to_nvs();
+    persist_to_nvs(s_config);
   }
 
   // Apply brand default server URL if NVS has none and secrets.json had none
@@ -379,15 +367,43 @@ system_config_t config_get(void) {
   return copy;
 }
 
-void config_set(const system_config_t* cfg) {
-  xSemaphoreTake(s_mutex, portMAX_DELAY);
-  memcpy(&s_config, cfg, sizeof(system_config_t));
-  persist_to_nvs();
-  s_generation++;
-  xSemaphoreGive(s_mutex);
+size_t config_get_hostname(char* out, size_t len) {
+  if (!out || len == 0) return 0;
+  raii::MutexGuard lock(s_mutex);
+  int n = snprintf(out, len, "%s", s_config.hostname);
+  return n < 0 ? 0 : std::min(static_cast<size_t>(n), len - 1);
+}
 
-  event_bus_emit_i32(TRONBYT_EVENT_CONFIG_CHANGED,
-                     static_cast<int32_t>(s_generation));
+bool config_get_ap_mode(void) {
+  raii::MutexGuard lock(s_mutex);
+  return s_config.ap_mode;
+}
+
+bool config_get_prefer_ipv6(void) {
+  raii::MutexGuard lock(s_mutex);
+  return s_config.prefer_ipv6;
+}
+
+void config_set(const system_config_t* cfg) {
+  if (!cfg) return;
+  raii::MutexGuard persist_lock(s_persist_mutex);
+
+  bool changed;
+  uint32_t gen;
+  {
+    raii::MutexGuard lock(s_mutex);
+    changed = memcmp(&s_config, cfg, sizeof(system_config_t)) != 0;
+    if (changed) memcpy(&s_config, cfg, sizeof(system_config_t));
+    gen = ++s_generation;
+  }
+
+  if (changed) {
+    persist_to_nvs(*cfg);
+  }
+
+  // Emitted even when nothing changed: a save is also the signal that flows
+  // such as the boot-button configuration wait are blocked on.
+  event_bus_emit_i32(TRONBYT_EVENT_CONFIG_CHANGED, static_cast<int32_t>(gen));
 }
 
 uint32_t config_generation(void) {
