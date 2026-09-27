@@ -27,6 +27,18 @@ bool outbox_ring_push(outbox_ring_t* ring, char* data, size_t len) {
   return dropped;
 }
 
+bool outbox_ring_push_front(outbox_ring_t* ring, char* data, size_t len) {
+  if (ring->count == OUTBOX_RING_DEPTH) {
+    free(data);
+    return true;
+  }
+  ring->head = (ring->head + OUTBOX_RING_DEPTH - 1) % OUTBOX_RING_DEPTH;
+  ring->slots[ring->head].data = data;
+  ring->slots[ring->head].len = len;
+  ring->count++;
+  return false;
+}
+
 bool outbox_ring_pop(outbox_ring_t* ring, outbox_ring_slot_t* out) {
   if (ring->count == 0) return false;
   *out = ring->slots[ring->head];

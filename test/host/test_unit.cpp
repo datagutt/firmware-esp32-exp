@@ -8,6 +8,7 @@
 #include "ota_url_utils.h"
 #include "outbox_ring.h"
 #include "quiet_hours_eval.h"
+#include "retry_backoff.h"
 #include "scheduler_fsm.h"
 #include "webp_frame.h"
 
@@ -278,6 +279,57 @@ static void test_outbox_ring() {
   outbox_ring_clear(&ring);
   assert(outbox_ring_count(&ring) == 0);
   assert(!outbox_ring_pop(&ring, &slot));
+
+  // A failed send goes back to the head, ahead of later messages, including
+  // across the index seam (head at 0 wraps to the last slot).
+  assert(!outbox_ring_push(&ring, strdup("a"), 1));
+  assert(!outbox_ring_push(&ring, strdup("b"), 1));
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(!outbox_ring_push_front(&ring, slot.data, slot.len));
+  assert(outbox_ring_count(&ring) == 2);
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(strncmp(slot.data, "a", 1) == 0);
+  free(slot.data);
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(strncmp(slot.data, "b", 1) == 0);
+  free(slot.data);
+
+  outbox_ring_init(&ring);
+  assert(!outbox_ring_push_front(&ring, strdup("z"), 1));
+  assert(!outbox_ring_push(&ring, strdup("y"), 1));
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(strncmp(slot.data, "z", 1) == 0);
+  free(slot.data);
+  outbox_ring_clear(&ring);
+
+  // Requeue onto a full ring drops the requeued (oldest) message itself.
+  for (int i = 0; i < OUTBOX_RING_DEPTH; i++) {
+    assert(!outbox_ring_push(&ring, strdup("f"), 1));
+  }
+  assert(outbox_ring_push_front(&ring, strdup("old"), 3));
+  assert(outbox_ring_count(&ring) == OUTBOX_RING_DEPTH);
+  assert(outbox_ring_pop(&ring, &slot));
+  assert(strncmp(slot.data, "f", 1) == 0);
+  free(slot.data);
+  outbox_ring_clear(&ring);
+}
+
+static void test_retry_backoff() {
+  // Lowest and highest random draws bound the window to [50%, 100%].
+  assert(retry_backoff_delay_ms(1, 5000, 60000, 0) == 2500);
+  assert(retry_backoff_delay_ms(1, 5000, 60000, 2500) == 5000);
+  assert(retry_backoff_delay_ms(2, 5000, 60000, 0) == 5000);
+  assert(retry_backoff_delay_ms(3, 5000, 60000, 10000) == 20000);
+  // Attempts at or below zero behave like the first attempt.
+  assert(retry_backoff_delay_ms(0, 5000, 60000, 0) == 2500);
+  assert(retry_backoff_delay_ms(-3, 5000, 60000, 0) == 2500);
+  // Capped, including attempts large enough to overflow an unguarded shift.
+  assert(retry_backoff_delay_ms(5, 5000, 60000, 30000) == 60000);
+  assert(retry_backoff_delay_ms(100, 5000, 60000, 0) == 30000);
+  for (uint32_t r = 0; r < 100000; r += 7919) {
+    uint32_t d = retry_backoff_delay_ms(4, 5000, 60000, r);
+    assert(d >= 20000 && d <= 40000);
+  }
 }
 
 int main() {
@@ -288,6 +340,7 @@ int main() {
   test_webp_frame_offsets();
   test_quiet_hours();
   test_outbox_ring();
+  test_retry_backoff();
   printf("host_unit_tests: PASS\n");
   return 0;
 }

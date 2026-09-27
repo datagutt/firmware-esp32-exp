@@ -12,6 +12,7 @@ add_executable(host_unit_tests
   ../../main/scheduler/scheduler_fsm.cpp
   ../../main/network/config_contract.cpp
   ../../main/network/outbox_ring.cpp
+  ../../main/network/retry_backoff.cpp
   ../../main/network/webp_frame.cpp
 )
 

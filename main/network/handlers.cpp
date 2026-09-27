@@ -41,6 +41,11 @@ constexpr int CONSUMER_PRIORITY = 4;
 constexpr int CONFIG_TASK_STACK_SIZE = 4096;
 constexpr int CONFIG_TASK_PRIORITY = 3;
 
+// Upper bound for one reassembled text (JSON) message. Server commands are a
+// few hundred bytes; the cap bounds what a misbehaving server can make us
+// buffer.
+constexpr size_t MAX_TEXT_MESSAGE_LEN = 16 * 1024;
+
 struct TextMsg {
   char* data;
   size_t len;
@@ -54,6 +59,15 @@ uint8_t* s_webp = nullptr;
 size_t s_ws_accumulated_len = 0;
 bool s_oversize_detected = false;
 bool s_first_image_received = false;
+
+// Text message reassembly, touched only from the WS task. A message arrives as
+// one or more frames (text frame, then continuation frames), and the
+// component delivers each frame in buffer_size chunks.
+char* s_text_rx = nullptr;
+size_t s_text_rx_cap = 0;         // allocated bytes, including the terminator
+size_t s_text_rx_len = 0;         // bytes received so far across all frames
+size_t s_text_rx_frame_base = 0;  // offset of the current frame in the message
+bool s_text_rx_active = false;    // false while no message is being assembled
 
 TaskHandle_t s_consumer_task = nullptr;
 SemaphoreHandle_t s_text_mutex = nullptr;
@@ -470,6 +484,72 @@ void consumer_task(void*) {
   }
 }
 
+char* text_rx_alloc(size_t size) {
+  return static_cast<char*>(psram_or_internal_malloc(size));
+}
+
+void text_rx_reset() {
+  free(s_text_rx);
+  s_text_rx = nullptr;
+  s_text_rx_cap = 0;
+  s_text_rx_len = 0;
+  s_text_rx_frame_base = 0;
+  s_text_rx_active = false;
+}
+
+// Makes room for a frame of `frame_len` bytes appended at s_text_rx_len.
+bool text_rx_begin_frame(size_t frame_len) {
+  s_text_rx_frame_base = s_text_rx_len;
+  size_t needed = s_text_rx_frame_base + frame_len;
+  if (needed > MAX_TEXT_MESSAGE_LEN) {
+    ESP_LOGW(TAG, "Text message exceeds %u bytes, dropping",
+             (unsigned)MAX_TEXT_MESSAGE_LEN);
+    return false;
+  }
+  if (needed + 1 <= s_text_rx_cap) return true;
+
+  char* grown = text_rx_alloc(needed + 1);
+  if (!grown) {
+    ESP_LOGE(TAG, "Failed to allocate text message buffer");
+    return false;
+  }
+  if (s_text_rx_len > 0) memcpy(grown, s_text_rx, s_text_rx_len);
+  free(s_text_rx);
+  s_text_rx = grown;
+  s_text_rx_cap = needed + 1;
+  return true;
+}
+
+// Takes ownership of buf and hands it to the consumer task.
+void text_mailbox_post(char* buf, size_t len) {
+  if (!ensure_text_mailbox_initialized()) {
+    ESP_LOGW(TAG, "Text mailbox not initialized, dropping text message");
+    free(buf);
+    return;
+  }
+
+  TextMsg msg = {buf, len};
+  if (xSemaphoreTake(s_text_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
+    ESP_LOGW(TAG, "Text mailbox busy, dropping newest message");
+    free(buf);
+    return;
+  }
+
+  if (s_pending_text.data) {
+    free(s_pending_text.data);
+    s_text_replace_count++;
+    if ((s_text_replace_count % 20) == 1) {
+      ESP_LOGW(TAG,
+               "Text message burst: replaced older pending messages (%" PRIu32
+               " replacements)",
+               s_text_replace_count);
+    }
+  }
+  s_pending_text = msg;
+  xSemaphoreGive(s_text_mutex);
+  xTaskNotifyGive(s_consumer_task);
+}
+
 }  // namespace
 
 void handlers_init() {
@@ -499,6 +579,7 @@ void handlers_deinit() {
     s_text_mutex = nullptr;
   }
   s_text_replace_count = 0;
+  text_rx_reset();
 
   if (s_config_task) {
     vTaskDelete(s_config_task);
@@ -513,43 +594,51 @@ void handlers_deinit() {
 }
 
 void handle_text_message(esp_websocket_event_data_t* data) {
-  bool is_complete =
-      (data->payload_offset + data->data_len >= data->payload_len);
-  if (!is_complete) return;
-
-  if (!ensure_text_mailbox_initialized()) {
-    ESP_LOGW("handlers", "Text mailbox not initialized, dropping text message");
+  if (data->payload_offset < 0 || data->data_len < 0 ||
+      data->payload_len < 0) {
     return;
   }
+  size_t offset = static_cast<size_t>(data->payload_offset);
+  size_t chunk = static_cast<size_t>(data->data_len);
+  size_t frame_len = static_cast<size_t>(data->payload_len);
 
-  auto* buf = static_cast<char*>(psram_or_internal_malloc(data->data_len + 1));
-  if (!buf) {
-    ESP_LOGE("handlers", "Failed to allocate text message buffer");
+  // A text frame starts a new message and discards any unfinished one; a
+  // continuation frame without a message in progress is dropped.
+  if (data->op_code == WS_TRANSPORT_OPCODES_TEXT && offset == 0) {
+    text_rx_reset();
+    s_text_rx_active = true;
+  }
+  if (!s_text_rx_active) return;
+
+  if (offset == 0 && !text_rx_begin_frame(frame_len)) {
+    text_rx_reset();
     return;
   }
-  memcpy(buf, data->data_ptr, data->data_len);
-  buf[data->data_len] = '\0';
+  size_t end = s_text_rx_frame_base + offset + chunk;
+  if (offset + chunk > frame_len || end >= s_text_rx_cap) {
+    ESP_LOGE(TAG, "Invalid text chunk offsets (%u+%u of %u), dropping",
+             (unsigned)offset, (unsigned)chunk, (unsigned)frame_len);
+    text_rx_reset();
+    return;
+  }
+  if (chunk > 0) {
+    memcpy(s_text_rx + s_text_rx_frame_base + offset, data->data_ptr, chunk);
+  }
+  if (end > s_text_rx_len) s_text_rx_len = end;
 
-  TextMsg msg = {buf, static_cast<size_t>(data->data_len)};
-  if (xSemaphoreTake(s_text_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
-    ESP_LOGW("handlers", "Text mailbox busy, dropping newest message");
+  bool frame_done = offset + chunk >= frame_len;
+  if (!data->fin || !frame_done) return;
+
+  char* buf = s_text_rx;
+  size_t len = s_text_rx_len;
+  s_text_rx = nullptr;
+  text_rx_reset();
+  if (len == 0) {
     free(buf);
     return;
   }
-
-  if (s_pending_text.data) {
-    free(s_pending_text.data);
-    s_text_replace_count++;
-    if ((s_text_replace_count % 20) == 1) {
-      ESP_LOGW("handlers",
-               "Text message burst: replaced older pending messages (%" PRIu32
-               " replacements)",
-               s_text_replace_count);
-    }
-  }
-  s_pending_text = msg;
-  xSemaphoreGive(s_text_mutex);
-  xTaskNotifyGive(s_consumer_task);
+  buf[len] = '\0';
+  text_mailbox_post(buf, len);
 }
 
 void handle_binary_message(esp_websocket_event_data_t* data) {

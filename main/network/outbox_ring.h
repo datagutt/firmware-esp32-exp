@@ -32,6 +32,12 @@ void outbox_ring_init(outbox_ring_t* ring);
 // when that happened.
 bool outbox_ring_push(outbox_ring_t* ring, char* data, size_t len);
 
+// Takes ownership of data and puts it back at the head, ahead of everything
+// queued, so a message whose send failed keeps its place in line. On a full
+// ring the requeued entry is itself the oldest, so it is the one freed and
+// dropped; returns true when that happened.
+bool outbox_ring_push_front(outbox_ring_t* ring, char* data, size_t len);
+
 // Pops the oldest entry into *out (the caller then owns out->data). Returns
 // false when the ring is empty.
 bool outbox_ring_pop(outbox_ring_t* ring, outbox_ring_slot_t* out);
