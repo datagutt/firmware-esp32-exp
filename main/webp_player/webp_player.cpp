@@ -22,6 +22,7 @@
 #include "assets.h"
 #include "display.h"
 #include "nvs_settings.h"
+#include "psram_alloc.h"
 #include "raii_utils.hpp"
 #include "sockets.h"
 #include "version.h"
@@ -158,13 +159,7 @@ void invalidate_prev_frame() {
 uint8_t* alloc_frame_copy(size_t needed) {
   // Prefer PSRAM: the copies are only memcmp/memcpy fodder and internal RAM
   // is scarce (TLS handshakes and task stacks need it more).
-  uint8_t* p =
-      static_cast<uint8_t*>(heap_caps_malloc(needed, MALLOC_CAP_SPIRAM));
-  if (!p) {
-    p = static_cast<uint8_t*>(
-        heap_caps_malloc(needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-  }
-  return p;
+  return static_cast<uint8_t*>(psram_or_internal_malloc(needed));
 }
 
 void render_frame_full(const uint8_t* frame, int canvas_w, int canvas_h) {

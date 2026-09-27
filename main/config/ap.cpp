@@ -15,6 +15,7 @@
 #include "http_server.h"
 #include "nvs_settings.h"
 #include "ota_http_upload.h"
+#include "psram_alloc.h"
 #include "sdkconfig.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -372,8 +373,7 @@ void url_decode(char* str) {
 esp_err_t save_handler(httpd_req_t* req) {
   ESP_LOGI(TAG, "Processing form submission");
 
-  auto* buf =
-      static_cast<char*>(heap_caps_malloc(4096, MALLOC_CAP_SPIRAM));
+  auto* buf = static_cast<char*>(psram_or_internal_malloc(4096));
   if (!buf) {
     ESP_LOGE(TAG, "Failed to allocate memory for form data");
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Server Error");

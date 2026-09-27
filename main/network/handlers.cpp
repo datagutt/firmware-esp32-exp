@@ -18,6 +18,7 @@
 #include "messages.h"
 #include "nvs_settings.h"
 #include "ota.h"
+#include "psram_alloc.h"
 #include "quiet_hours.h"
 #include "sdkconfig.h"
 #include "syslog.h"
@@ -299,8 +300,7 @@ void process_text_message(const char* json_str) {
 
   if (has_ota_url) {
     size_t url_len = strlen(ota_url_value) + 1;
-    char* ota_url = static_cast<char*>(
-        heap_caps_malloc(url_len, MALLOC_CAP_SPIRAM));
+    char* ota_url = static_cast<char*>(psram_or_internal_malloc(url_len));
     if (ota_url) {
       memcpy(ota_url, ota_url_value, url_len);
       ESP_LOGI(TAG, "OTA URL received via WS: %s", ota_url);
@@ -522,8 +522,7 @@ void handle_text_message(esp_websocket_event_data_t* data) {
     return;
   }
 
-  auto* buf = static_cast<char*>(
-      heap_caps_malloc(data->data_len + 1, MALLOC_CAP_SPIRAM));
+  auto* buf = static_cast<char*>(psram_or_internal_malloc(data->data_len + 1));
   if (!buf) {
     ESP_LOGE("handlers", "Failed to allocate text message buffer");
     return;
@@ -585,9 +584,8 @@ void handle_binary_message(esp_websocket_event_data_t* data) {
     }
 
     if (data->payload_len > 0) {
-      s_webp = static_cast<uint8_t*>(heap_caps_malloc(
-          static_cast<size_t>(data->payload_len),
-          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+      s_webp = static_cast<uint8_t*>(
+          psram_or_internal_malloc(static_cast<size_t>(data->payload_len)));
       if (!s_webp) {
         ESP_LOGE(TAG, "Failed to allocate WebP buffer (%d bytes)",
                  data->payload_len);

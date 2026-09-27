@@ -18,6 +18,7 @@
 #include "http_slot.h"
 #include "nvs_settings.h"
 #include "ota.h"
+#include "psram_alloc.h"
 #include "quiet_hours.h"
 #include "sdkconfig.h"
 #include "version.h"
@@ -78,11 +79,11 @@ bool parse_header_bool(const char* value) {
          strcasecmp(value, "yes") == 0;
 }
 
-// Duplicates a header value into PSRAM. Returns nullptr on allocation failure,
-// which callers treat as "header not present".
+// Duplicates a header value, preferring PSRAM. Returns nullptr on allocation
+// failure, which callers treat as "header not present".
 char* dup_header_value(const char* value) {
   size_t len = strlen(value) + 1;
-  auto* copy = static_cast<char*>(heap_caps_malloc(len, MALLOC_CAP_SPIRAM));
+  auto* copy = static_cast<char*>(psram_or_internal_malloc(len));
   if (copy) memcpy(copy, value, len);
   return copy;
 }
@@ -134,8 +135,8 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
         } else {
           state->expected_len = content_length;
           if (content_length > state->size) {
-            void* resized = heap_caps_realloc(state->buf, content_length,
-                                              MALLOC_CAP_SPIRAM);
+            void* resized =
+                psram_or_internal_realloc(state->buf, content_length);
             if (!resized) {
               ESP_LOGE(TAG, "Failed to reserve Content-Length buffer (%zu)",
                        content_length);
@@ -222,8 +223,7 @@ esp_err_t http_callback(esp_http_client_event_t* event) {
           break;
         }
 
-        void* resized = heap_caps_realloc(state->buf, state->size,
-                                          MALLOC_CAP_SPIRAM);
+        void* resized = psram_or_internal_realloc(state->buf, state->size);
         if (!resized) {
           ESP_LOGE(TAG, "Resizing response buffer failed");
           free(state->buf);
@@ -284,8 +284,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
                int* return_status_code, char** ota_url, char** image_url,
                bool* reboot_requested) {
   RemoteState state = {
-      .buf = heap_caps_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT,
-                              MALLOC_CAP_SPIRAM),
+      .buf = psram_or_internal_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT),
       .len = 0,
       .size = CONFIG_HTTP_BUFFER_SIZE_DEFAULT,
       .max = CONFIG_HTTP_BUFFER_SIZE_MAX,
@@ -346,8 +345,7 @@ int remote_get(const char* url, uint8_t** buf, size_t* len,
       // realloc failure (sets buf to nullptr). Re-allocate so this attempt
       // starts with a clean receive buffer.
       if (!state.buf) {
-        state.buf  = heap_caps_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT,
-                                      MALLOC_CAP_SPIRAM);
+        state.buf  = psram_or_internal_malloc(CONFIG_HTTP_BUFFER_SIZE_DEFAULT);
         state.size = CONFIG_HTTP_BUFFER_SIZE_DEFAULT;
         if (!state.buf) {
           ESP_LOGE(TAG, "couldn't reallocate HTTP receive buffer");

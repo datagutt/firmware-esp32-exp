@@ -7,3 +7,15 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_SPIRAM=n
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/max_app_4mb.csv"
 CONFIG_HUB75_CLK_PHASE_INVERTED=y
+
+# No PSRAM, so every TLS buffer lives in internal RAM. Allocate the TLS
+# record buffers only while data is in flight and drop the CA/key data once
+# the handshake is done, instead of pinning ~20 KB per session.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+
+# Static WiFi TX buffers are only needed to guarantee buffers when PSRAM is
+# in use. Without it, dynamic buffers free ~13 KB of internal RAM when idle.
+# CONFIG_ESP_WIFI_STATIC_TX_BUFFER is not set
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER=y
