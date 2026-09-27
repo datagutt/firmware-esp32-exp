@@ -187,6 +187,16 @@ menu "Application Configuration"
             is tapped or held.
             Can still be toggled via NVS, WebSocket, or the config portal.
 
+    config TOUCH_DOUBLE_TAP
+        bool "Detect Double Tap"
+        default n
+        depends on BOARD_TIDBYT_GEN2
+        help
+            Wait for a possible second tap before reporting a tap.
+            Double tap has no action assigned yet, and waiting for it delays
+            every single tap by the double-tap window (500 ms), so a tap is
+            reported as soon as the finger lifts unless this is enabled.
+
     config ENABLE_CONSOLE
         bool "Enable UART Console"
         default y

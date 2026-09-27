@@ -34,7 +34,7 @@ extern "C" {
 typedef enum {
   TOUCH_EVENT_NONE = 0,
   TOUCH_EVENT_TAP,         // Single tap - next app
-  TOUCH_EVENT_DOUBLE_TAP,  // Double tap - cycle brightness
+  TOUCH_EVENT_DOUBLE_TAP,  // Double tap - unassigned, needs CONFIG_TOUCH_DOUBLE_TAP
   TOUCH_EVENT_HOLD         // Long hold (2+ sec) - toggle display on/off
 } touch_event_t;
 
