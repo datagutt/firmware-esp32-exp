@@ -25,6 +25,8 @@ void display_clear(void);
 void display_draw_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b);
 void display_fill_rect(int x, int y, int w, int h, uint8_t r, uint8_t g,
                        uint8_t b);
+// Error indicator: a red pixel in the top-left corner, drawn by the player on
+// top of the current image. Safe to call from any task.
 void draw_error_indicator_pixel(void);
 void clear_error_indicator_pixel(void);
 void display_text(const char* text, int x, int y, uint8_t r, uint8_t g,

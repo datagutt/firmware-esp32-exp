@@ -23,7 +23,11 @@ public:
     WebpDecoder& operator=(WebpDecoder&&) noexcept;
 
     /// Initialize from WebP data. Data must remain valid for lifetime of decoder.
-    esp_err_t init(const uint8_t* data, size_t size);
+    /// A canvas wider than max_width or taller than max_height (0 = no limit)
+    /// is rejected with ESP_ERR_INVALID_SIZE before any decode buffer is
+    /// allocated.
+    esp_err_t init(const uint8_t* data, size_t size, uint32_t max_width = 0,
+                   uint32_t max_height = 0);
 
     /// Get info about the loaded WebP.
     WebpDecoderInfo get_info() const;

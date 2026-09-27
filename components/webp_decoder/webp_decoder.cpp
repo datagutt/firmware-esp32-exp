@@ -36,7 +36,8 @@ WebpDecoder::~WebpDecoder() = default;
 WebpDecoder::WebpDecoder(WebpDecoder&&) noexcept = default;
 WebpDecoder& WebpDecoder::operator=(WebpDecoder&&) noexcept = default;
 
-esp_err_t WebpDecoder::init(const uint8_t* data, size_t size) {
+esp_err_t WebpDecoder::init(const uint8_t* data, size_t size,
+                            uint32_t max_width, uint32_t max_height) {
     if (!data || size == 0) {
         ESP_LOGE(TAG, "No WebP data");
         return ESP_ERR_INVALID_ARG;
@@ -63,6 +64,14 @@ esp_err_t WebpDecoder::init(const uint8_t* data, size_t size) {
         ESP_LOGE(TAG, "Invalid dimensions: %ux%u",
                  p->info.canvas_width, p->info.canvas_height);
         return ESP_ERR_INVALID_ARG;
+    }
+
+    if ((max_width && p->info.canvas_width > max_width) ||
+        (max_height && p->info.canvas_height > max_height)) {
+        ESP_LOGE(TAG, "Canvas %ux%u exceeds limit %ux%u",
+                 p->info.canvas_width, p->info.canvas_height, max_width,
+                 max_height);
+        return ESP_ERR_INVALID_SIZE;
     }
 
     if (p->info.is_animated) {

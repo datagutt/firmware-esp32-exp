@@ -8,10 +8,18 @@
 #include "font5x7.h"
 #include "nvs_handle.h"
 #include "nvs_settings.h"
+#include "raii_utils.hpp"
 #include "scheduler.h"
 #include "webp_player.h"
 
 static Hub75Driver *_matrix;
+
+// Guards _matrix for every entry point other tasks can reach (brightness,
+// text, fills, flips) against display_reinit() swapping the driver's DMA
+// engine. The per-frame draw calls only the player makes (display_draw_buffer,
+// display_draw_span, display_draw) stay lock-free: display_reinit() waits for
+// the player to go idle before touching the driver instead.
+static SemaphoreHandle_t _matrix_mutex = NULL;
 
 #ifdef CONFIG_DISPLAY_FRAME_SYNC
 static SemaphoreHandle_t _frame_sync_sem = NULL;
@@ -211,38 +219,50 @@ static bool display_reinit(void) {
 
   const bool was_paused = scheduler_is_paused();
   scheduler_pause();  // stops timers, gfx_stop(), blanks the panel
-  gfx_wait_idle();    // player task has left the draw path
 
-  // Publish NULL before teardown so any other drawer bails at its null check
-  // rather than following a dangling pointer into a freed DMA engine.
-  Hub75Driver *m = _matrix;
-  _matrix = NULL;
-  vTaskDelay(pdMS_TO_TICKS(20));
+  // The player's frame draws do not take _matrix_mutex, so it has to be out
+  // of the draw path before the DMA engine goes away.
+  if (!gfx_wait_idle()) {
+    ESP_LOGE(TAG, "Player still drawing; display re-init skipped");
+    if (!was_paused) scheduler_resume();
+    return false;
+  }
 
-  // begin() applies config_.brightness, so carry the live value across.
-  _mxconfig.brightness = m->get_brightness();
+  bool ok = false;
+  {
+    raii::MutexGuard lock(_matrix_mutex);
+    if (lock) {
+      // NULL while the engine is rebuilt, so a stray frame draw bails at its
+      // null check rather than following a dangling pointer.
+      Hub75Driver *m = _matrix;
+      _matrix = NULL;
 
-  m->end();
-  m->set_config(_mxconfig);
+      // begin() applies config_.brightness, so carry the live value across.
+      _mxconfig.brightness = m->get_brightness();
 
-  const bool ok = m->begin();
-  if (ok) {
-    _matrix = m;
+      m->end();
+      m->set_config(_mxconfig);
+
+      ok = m->begin();
+      if (ok) {
+        _matrix = m;
 #ifdef CONFIG_DISPLAY_FRAME_SYNC
-    // begin() creates a fresh platform DMA object, which is where the frame
-    // callback is stored, so it has to be re-registered or display_wait_frame
-    // silently times out forever.
-    if (_frame_sync_sem) {
-      _matrix->set_frame_callback(frame_sync_isr, _frame_sync_sem);
-    }
+        // begin() creates a fresh platform DMA object, which is where the
+        // frame callback is stored, so it has to be re-registered or
+        // display_wait_frame silently times out forever.
+        if (_frame_sync_sem) {
+          _matrix->set_frame_callback(frame_sync_isr, _frame_sync_sem);
+        }
 #endif
-    _matrix->clear();
-  } else {
-    // Leave _matrix NULL: begin() failed, so there is no DMA engine to draw
-    // into. The caller reverts the setting and retries, which is why the driver
-    // object is kept alive here.
-    ESP_LOGE(TAG, "Display re-init failed; panel is off pending revert");
-    _reinit_orphan = m;
+        _matrix->clear();
+      } else {
+        // Leave _matrix NULL: begin() failed, so there is no DMA engine to
+        // draw into. The caller reverts the setting and retries, which is why
+        // the driver object is kept alive here.
+        ESP_LOGE(TAG, "Display re-init failed; panel is off pending revert");
+        _reinit_orphan = m;
+      }
+    }
   }
 
   if (!was_paused) scheduler_resume();
@@ -276,9 +296,12 @@ static bool display_apply_tuning(const char *key, void (*apply)(uint8_t),
 
   // display_reinit() parked the driver here when begin() failed; take it back
   // so the retry has an object to restart.
-  if (_reinit_orphan) {
-    _matrix = _reinit_orphan;
-    _reinit_orphan = NULL;
+  {
+    raii::MutexGuard lock(_matrix_mutex);
+    if (_reinit_orphan) {
+      _matrix = _reinit_orphan;
+      _reinit_orphan = NULL;
+    }
   }
   if (!display_reinit()) {
     ESP_LOGE(TAG, "Revert also failed; display stays off until reboot");
@@ -540,6 +563,12 @@ int display_initialize(void) {
   // matching the NVS > secrets.json > Kconfig override order.
   hw_settings_load();
 
+  _matrix_mutex = xSemaphoreCreateMutex();
+  if (_matrix_mutex == NULL) {
+    ESP_LOGE(TAG, "Failed to create display mutex");
+    return 1;
+  }
+
   _matrix = new Hub75Driver(mxconfig);
 
   if (_matrix == NULL) {
@@ -570,6 +599,13 @@ int display_initialize(void) {
 
 uint8_t display_get_brightness() { return _brightness; }
 
+// The driver applies brightness to both DMA buffers at once, so nothing on the
+// panel has to be redrawn.
+static void matrix_set_brightness(uint8_t level) {
+  raii::MutexGuard lock(_matrix_mutex);
+  if (lock && _matrix != NULL) _matrix->set_brightness(level);
+}
+
 void display_set_brightness(uint8_t brightness_pct) {
   if (brightness_pct > DISPLAY_MAX_BRIGHTNESS) {
     ESP_LOGW(TAG, "Ignoring invalid brightness %u (valid range %d-%d)",
@@ -582,39 +618,22 @@ void display_set_brightness(uint8_t brightness_pct) {
 
     ESP_LOGI(TAG, "Setting brightness to %d%% (%d)", brightness_pct,
              brightness_8bit);
-    _matrix->set_brightness(brightness_8bit);
-    _matrix->clear();
+    matrix_set_brightness(brightness_8bit);
     _brightness = brightness_pct;
     brightness_save(brightness_pct);
   }
 }
 
+// Also registered as an esp_restart() shutdown handler, which runs while other
+// tasks (the player on core 1 among them) are still scheduled, and is reached
+// on restart paths that never stopped the player. So the driver, its DMA
+// buffers and the frame-sync semaphore stay alive: the panel is only blanked,
+// and the chip reset takes care of the rest.
 void display_shutdown(void) {
-  if (_matrix == NULL) {
-#ifdef CONFIG_DISPLAY_FRAME_SYNC
-    if (_frame_sync_sem) {
-      vSemaphoreDelete(_frame_sync_sem);
-      _frame_sync_sem = NULL;
-    }
-#endif
-    return;
-  }
-
-#ifdef CONFIG_DISPLAY_FRAME_SYNC
-  _matrix->set_frame_callback(nullptr, nullptr);
-#endif
-
-  _matrix->clear();
-  _matrix->end();
-  delete _matrix;
-  _matrix = NULL;
-
-#ifdef CONFIG_DISPLAY_FRAME_SYNC
-  if (_frame_sync_sem) {
-    vSemaphoreDelete(_frame_sync_sem);
-    _frame_sync_sem = NULL;
-  }
-#endif
+  gfx_stop();
+  gfx_wait_idle();
+  // Zero brightness gates the output of both buffers without a flip.
+  matrix_set_brightness(0);
 }
 
 bool display_wait_frame(uint32_t timeout_ms) {
@@ -765,30 +784,38 @@ void display_draw(const uint8_t *pix, int width, int height) {
   if (_matrix != NULL) _matrix->flip_buffer();
 }
 
-void display_clear(void) { if (_matrix != NULL) _matrix->clear(); }
+void display_clear(void) {
+  raii::MutexGuard lock(_matrix_mutex);
+  if (lock && _matrix != NULL) _matrix->clear();
+}
 
 void display_draw_pixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
-  if (_matrix != NULL) {
+  raii::MutexGuard lock(_matrix_mutex);
+  if (lock && _matrix != NULL) {
     _matrix->set_pixel(x, y, r, g, b);
-    _matrix->flip_buffer();
+    // Note: No flip here, caller must flip
   }
 }
 
 void display_fill_rect(int x, int y, int w, int h, uint8_t r, uint8_t g,
                        uint8_t b) {
-  if (_matrix != NULL) {
+  raii::MutexGuard lock(_matrix_mutex);
+  if (lock && _matrix != NULL) {
     _matrix->fill(x, y, w, h, r, g, b);
     // Note: No flip here, caller must flip
   }
 }
 
-void draw_error_indicator_pixel(void) { display_draw_pixel(0, 0, 100, 0, 0); }
+// Drawn by the player as an overlay: drawing it here would land in the back
+// buffer and need a flip, which shows whatever that buffer last held.
+void draw_error_indicator_pixel(void) { gfx_set_error_indicator(true); }
 
-void clear_error_indicator_pixel(void) { display_draw_pixel(0, 0, 0, 0, 0); }
+void clear_error_indicator_pixel(void) { gfx_set_error_indicator(false); }
 
 void display_text(const char *text, int x, int y, uint8_t r, uint8_t g,
                   uint8_t b, int scale) {
-  if (_matrix == NULL || text == NULL) {
+  raii::MutexGuard lock(_matrix_mutex);
+  if (!lock || _matrix == NULL || text == NULL) {
     return;
   }
 
@@ -841,7 +868,8 @@ void display_text(const char *text, int x, int y, uint8_t r, uint8_t g,
 }
 
 void display_flip(void) {
-  if (_matrix != NULL) {
+  raii::MutexGuard lock(_matrix_mutex);
+  if (lock && _matrix != NULL) {
     _matrix->flip_buffer();
   }
 }

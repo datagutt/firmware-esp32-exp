@@ -93,7 +93,11 @@ int gfx_display_asset(const char* asset_type);
 void gfx_display_text(const char* text, int x, int y, uint8_t r, uint8_t g,
                       uint8_t b, int scale);
 
-/** Stop playback and go idle. */
+/**
+ * Stop playback and go idle. While stopped the player does not touch the
+ * panel, so the caller may draw on it; pair with gfx_wait_idle() to be sure
+ * the player has left the draw path.
+ */
 void gfx_stop(void);
 
 /** Resume from stopped state. */
@@ -104,8 +108,18 @@ void gfx_interrupt(void);
 /** Interrupt current playback and immediately apply pending content if any. */
 void gfx_preempt(void);
 
-/** Block until the gfx task finishes the current animation. */
-void gfx_wait_idle(void);
+/**
+ * Block until the gfx task is idle and out of the draw path, for at most a
+ * few seconds. Returns false on timeout.
+ */
+bool gfx_wait_idle(void);
+
+/**
+ * Show or hide the error indicator (a red pixel in the top-left corner) on top
+ * of whatever the player shows. Safe from any task: the player task draws it,
+ * so no other task ever flips the display buffers.
+ */
+void gfx_set_error_indicator(bool on);
 
 /** Cleanly stop playback, tear down display, then restart. */
 void gfx_safe_restart(void);

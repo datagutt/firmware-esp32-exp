@@ -22,7 +22,6 @@
 #include "assets.h"
 #include "display.h"
 #include "nvs_settings.h"
-#include "psram_alloc.h"
 #include "raii_utils.hpp"
 #include "sockets.h"
 #include "version.h"
@@ -65,8 +64,16 @@ constexpr int TASK_PRIORITY = 2;
 constexpr int TASK_CORE = 1;
 constexpr int DECODE_RETRY_COUNT = 3;
 constexpr int DECODE_RETRY_DELAY_MS = 200;
+constexpr uint32_t WAIT_IDLE_TIMEOUT_MS = 2000;
+constexpr int64_t TICK_US = 1000000 / configTICK_RATE_HZ;
 
+// Set while the task is not drawing: IDLE, or momentarily cleared while an
+// idle task repaints the error indicator.
 constexpr EventBits_t BIT_IDLE = BIT0;
+
+// RGBA like decoded frames, so it goes through the same color-order path.
+constexpr uint8_t INDICATOR_RGBA[4] = {100, 0, 0, 255};
+constexpr uint8_t BLACK_RGBA[4] = {0, 0, 0, 255};
 
 //------------------------------------------------------------------------------
 // Player State
@@ -116,20 +123,36 @@ struct PlayerContext {
   // Decoder (owns the decoded frame buffer; see WebpDecoder::get_next_frame)
   WebpDecoder decoder;
   WebpDecoderInfo decoder_info = {};
+  // Last successfully decoded frame, i.e. what the panel shows. Owned by the
+  // decoder and only valid until its next decode or destruction.
+  const uint8_t* current_frame = nullptr;
 
-  // Frame copies for row diffing (lazily allocated). shown_frame mirrors what
-  // the panel displays; back_frame mirrors the back DMA buffer, which after a
-  // flip holds the frame from two flips ago. Anything that draws outside
-  // render_frame_diffed must invalidate both.
+  // Frame copies for row diffing (lazily allocated, PSRAM only, kept across
+  // images). shown_frame mirrors what the panel displays; back_frame mirrors
+  // the back DMA buffer, which after a flip holds the frame from two flips
+  // ago. They hold frame content only, never the error indicator.
   uint8_t* shown_frame = nullptr;
   uint8_t* back_frame = nullptr;
-  int prev_w = 0;
+  int prev_w = 0;  // canvas size of the last rendered frame
   int prev_h = 0;
   bool shown_valid = false;
   bool back_valid = false;
 
+  // Error indicator overlay. Requested from any task, drawn only here.
+  std::atomic<bool> indicator_wanted{false};
+  bool indicator_drawn = false;
+  // Frame pixel under the indicator, to restore when it is cleared.
+  uint8_t pixel0[4] = {};
+  bool pixel0_valid = false;
+  // Both DMA buffers hold the same image, so a single pixel can be changed
+  // with draw, flip, draw without the flip exposing an older frame.
+  bool panel_settled = false;
+  // Set by other tasks after drawing on the panel while the player was
+  // stopped; the player then forgets what it believes the panel shows.
+  std::atomic<bool> foreign_draw{false};
+
   // Timing
-  TickType_t next_frame_tick = 0;
+  int64_t next_frame_us = 0;
   int64_t playback_start_us = 0;
 
   // Error tracking
@@ -141,50 +164,83 @@ struct PlayerContext {
 PlayerContext ctx;
 
 //------------------------------------------------------------------------------
-// Frame Diffing
+// Rendering
 //------------------------------------------------------------------------------
-// Ported from matrx-fw. Skips DMA-buffer writes for content that did not
-// change since the previous frame: identical frames are skipped entirely,
-// mostly-changed frames render in full (which hits the driver's fused
-// full-frame path), and otherwise only the changed span of each dirty row is
-// written. Row spans write into the live buffer, so they are only safe
-// without CONFIG_HUB75_DOUBLE_BUFFER; with double buffering the back buffer
-// holds stale content and partial writes would tear.
+// The player task is the only code that draws on the panel while playback is
+// running, and the only code that flips its buffers. Anything else shown on
+// top of the image (the error indicator) is an overlay applied here.
+//
+// Frame diffing is ported from matrx-fw. It skips DMA-buffer writes for
+// content that did not change since the previous frame: identical frames are
+// skipped entirely, mostly-changed frames render in full (which hits the
+// driver's fused full-frame path), and otherwise only the changed span of
+// each dirty row is written, diffed against whatever the buffer being drawn
+// into currently holds.
 
 void invalidate_prev_frame() {
   ctx.shown_valid = false;
   ctx.back_valid = false;
 }
 
-uint8_t* alloc_frame_copy(size_t needed) {
-  // Prefer PSRAM: the copies are only memcmp/memcpy fodder and internal RAM
-  // is scarce (TLS handshakes and task stacks need it more).
-  return static_cast<uint8_t*>(psram_or_internal_malloc(needed));
+// The panel was drawn on by someone else: nothing the player knows about its
+// content holds any more.
+void forget_panel_content() {
+  invalidate_prev_frame();
+  ctx.panel_settled = false;
+  ctx.pixel0_valid = false;
+  ctx.indicator_drawn = false;
 }
 
-void render_frame_full(const uint8_t* frame, int canvas_w, int canvas_h) {
-#ifdef CONFIG_DISPLAY_FRAME_SYNC
-  display_draw_buffer(frame, canvas_w, canvas_h);
-  display_wait_frame(50);
-  display_flip();
+uint8_t* alloc_frame_copy(size_t needed) {
+#if CONFIG_SPIRAM
+  // PSRAM only: the copies are an optimization, and on internal RAM they would
+  // compete with TLS handshakes and task stacks. Without them every frame
+  // simply renders in full.
+  return static_cast<uint8_t*>(heap_caps_malloc(needed, MALLOC_CAP_SPIRAM));
 #else
-  display_draw(frame, canvas_w, canvas_h);
+  (void)needed;
+  return nullptr;
 #endif
 }
 
-void render_frame_diffed(const uint8_t* frame, int canvas_w, int canvas_h) {
+void present() {
+#if CONFIG_HUB75_DOUBLE_BUFFER
+#ifdef CONFIG_DISPLAY_FRAME_SYNC
+  display_wait_frame(50);
+#endif
+  display_flip();
+#endif
+}
+
+// Draws the indicator state into the buffer being drawn (no flip). Clearing
+// restores the frame pixel it covered, or black if that is unknown.
+void draw_indicator(bool on) {
+  const uint8_t* px = on                  ? INDICATOR_RGBA
+                      : ctx.pixel0_valid ? ctx.pixel0
+                                         : BLACK_RGBA;
+  display_draw_buffer(px, 1, 1);
+}
+
+void render_frame(const uint8_t* frame, int canvas_w, int canvas_h) {
   const size_t row_bytes = static_cast<size_t>(canvas_w) * 4;
   const size_t needed = row_bytes * canvas_h;
 
-  if (!ctx.shown_frame || ctx.prev_w != canvas_w || ctx.prev_h != canvas_h) {
+  // Both buffers may still carry the old indicator state, so a change forces
+  // full renders until each has been rewritten.
+  const bool indicator = ctx.indicator_wanted.load();
+  if (indicator != ctx.indicator_drawn) {
+    invalidate_prev_frame();
+    ctx.indicator_drawn = indicator;
+  }
+
+  if (ctx.prev_w != canvas_w || ctx.prev_h != canvas_h) {
     heap_caps_free(ctx.shown_frame);
     ctx.shown_frame = alloc_frame_copy(needed);
-    ctx.shown_valid = false;
 #if CONFIG_HUB75_DOUBLE_BUFFER
     heap_caps_free(ctx.back_frame);
     ctx.back_frame = alloc_frame_copy(needed);
-    ctx.back_valid = false;
 #endif
+    invalidate_prev_frame();
     ctx.prev_w = canvas_w;
     ctx.prev_h = canvas_h;
   }
@@ -194,6 +250,10 @@ void render_frame_diffed(const uint8_t* frame, int canvas_w, int canvas_h) {
       memcmp(frame, ctx.shown_frame, needed) == 0) {
     return;
   }
+
+  ctx.panel_settled = false;
+  memcpy(ctx.pixel0, frame, sizeof(ctx.pixel0));
+  ctx.pixel0_valid = true;
 
   // Span writes land in the buffer that becomes visible next, so they must
   // diff against that buffer's current content: the back copy under double
@@ -206,6 +266,7 @@ void render_frame_diffed(const uint8_t* frame, int canvas_w, int canvas_h) {
   const bool ref_valid = ctx.shown_valid;
 #endif
 
+  bool spans_drawn = false;
   if (ref && ref_valid && display_span_supported(canvas_w, canvas_h)) {
     // Single compare pass over the (PSRAM) frame copies: remember which rows
     // differ so the span loop below does not memcmp the same rows again.
@@ -235,30 +296,34 @@ void render_frame_diffed(const uint8_t* frame, int canvas_w, int canvas_h) {
                           y, span, canvas_w, canvas_h);
         memcpy(prev + first, cur + first, static_cast<size_t>(span) * 4);
       }
-#if CONFIG_HUB75_DOUBLE_BUFFER
-#ifdef CONFIG_DISPLAY_FRAME_SYNC
-      display_wait_frame(50);
-#endif
-      display_flip();
-      // The buffer just written is now visible; the old shown content became
-      // the back buffer. Swap the copies to match.
-      uint8_t* tmp = ctx.shown_frame;
-      ctx.shown_frame = ctx.back_frame;
-      ctx.back_frame = tmp;
-      ctx.back_valid = ctx.shown_valid;
-      ctx.shown_valid = true;
-#endif
-      return;
+      spans_drawn = true;
     }
   }
 
-  render_frame_full(frame, canvas_w, canvas_h);
+  if (!spans_drawn) {
+    display_draw_buffer(frame, canvas_w, canvas_h);
+  }
+  // Re-applied on every draw: a span may have covered the pixel, and the
+  // buffer drawn into may predate the indicator.
+  if (indicator) {
+    draw_indicator(true);
+  }
+  present();
+
 #if CONFIG_HUB75_DOUBLE_BUFFER
-  // Full render flipped: the old shown content is now the back buffer.
+  // The buffer just written is now visible and the old shown content became
+  // the back buffer. Swap the copies to match.
   uint8_t* tmp = ctx.shown_frame;
   ctx.shown_frame = ctx.back_frame;
   ctx.back_frame = tmp;
   ctx.back_valid = ctx.shown_valid;
+  if (spans_drawn) {
+    // The spans already brought the reference copy up to date.
+    ctx.shown_valid = true;
+    return;
+  }
+#else
+  if (spans_drawn) return;
 #endif
   if (ctx.shown_frame) {
     memcpy(ctx.shown_frame, frame, needed);
@@ -266,6 +331,69 @@ void render_frame_diffed(const uint8_t* frame, int canvas_w, int canvas_h) {
   } else {
     ctx.shown_valid = false;
   }
+}
+
+// Copies the image on screen into the back buffer as well, so a later flip
+// (an indicator change on a static or idle panel) cannot bring back an older
+// frame. Skipped while stopped: whoever stopped the player owns the panel.
+void settle_panel() {
+  if (ctx.panel_settled || ctx.paused.load()) return;
+#if CONFIG_HUB75_DOUBLE_BUFFER
+  const uint8_t* shown = ctx.current_frame;
+  if (!shown && ctx.shown_frame && ctx.shown_valid) {
+    shown = ctx.shown_frame;
+  }
+  if (!shown) return;
+  display_draw_buffer(shown, ctx.prev_w, ctx.prev_h);
+  if (ctx.indicator_drawn) {
+    draw_indicator(true);
+  }
+  if (ctx.back_frame && ctx.shown_frame && ctx.shown_valid) {
+    memcpy(ctx.back_frame, ctx.shown_frame,
+           static_cast<size_t>(ctx.prev_w) * ctx.prev_h * 4);
+    ctx.back_valid = true;
+  }
+#endif
+  ctx.panel_settled = true;
+}
+
+// Applies an indicator change without re-rendering the image. On a settled
+// panel both buffers end up identical again; otherwise (content someone else
+// drew, or a frame that could not be settled) the flip may show what the
+// back buffer held, which is the best that can be done without the image.
+void repaint_indicator_in_place() {
+  const bool want = ctx.indicator_wanted.load();
+  if (want == ctx.indicator_drawn) return;
+  ctx.indicator_drawn = want;
+  draw_indicator(want);
+#if CONFIG_HUB75_DOUBLE_BUFFER
+  present();
+  draw_indicator(want);
+#endif
+}
+
+// Brings the panel's indicator up to date while an image is playing.
+void refresh_indicator_playing() {
+  if (ctx.indicator_wanted.load() == ctx.indicator_drawn) return;
+  if (ctx.panel_settled) {
+    repaint_indicator_in_place();
+  } else if (ctx.current_frame) {
+    render_frame(ctx.current_frame, ctx.decoder_info.canvas_width,
+                 ctx.decoder_info.canvas_height);
+  }
+  // Otherwise the next decoded frame picks it up.
+}
+
+// Brings the panel's indicator up to date while idle. gfx_wait_idle() callers
+// rely on BIT_IDLE meaning "not drawing", so it is dropped for the duration
+// and the pause flag re-checked after dropping it.
+void refresh_indicator_idle() {
+  if (ctx.indicator_wanted.load() == ctx.indicator_drawn) return;
+  xEventGroupClearBits(ctx.event_group, BIT_IDLE);
+  if (!ctx.paused.load()) {
+    repaint_indicator_in_place();
+  }
+  xEventGroupSetBits(ctx.event_group, BIT_IDLE);
 }
 
 //------------------------------------------------------------------------------
@@ -281,51 +409,34 @@ bool is_static_asset(const void* ptr) { return asset_is_static(ptr); }
 void destroy_decoder() {
   ctx.decoder = WebpDecoder();  // Reset to default
   ctx.decoder_info = {};
-  if (ctx.shown_frame) {
-    heap_caps_free(ctx.shown_frame);
-    ctx.shown_frame = nullptr;
-  }
-  if (ctx.back_frame) {
-    heap_caps_free(ctx.back_frame);
-    ctx.back_frame = nullptr;
-  }
-  ctx.shown_valid = false;
-  ctx.back_valid = false;
+  ctx.current_frame = nullptr;
 }
 
-bool create_decoder() {
+// Returns ESP_ERR_INVALID_SIZE for a canvas larger than the panel.
+esp_err_t create_decoder() {
   destroy_decoder();
 
   if (!ctx.webp_buf || ctx.webp_len == 0) {
     ESP_LOGE(TAG, "No WebP data");
-    return false;
+    return ESP_ERR_INVALID_ARG;
   }
 
-  esp_err_t err = ctx.decoder.init(
-      static_cast<const uint8_t*>(ctx.webp_buf), ctx.webp_len);
+  // The panel bound is checked before the decoder allocates its canvases:
+  // display_draw_buffer rejects larger frames anyway, so decoding them would
+  // only burn memory and CPU on frames that never show.
+  esp_err_t err = ctx.decoder.init(static_cast<const uint8_t*>(ctx.webp_buf),
+                                   ctx.webp_len, CONFIG_HUB75_PANEL_WIDTH,
+                                   CONFIG_HUB75_PANEL_HEIGHT);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Decoder init failed: %s", esp_err_to_name(err));
-    return false;
+    return err;
   }
 
   ctx.decoder_info = ctx.decoder.get_info();
-
-  // Bound the canvas even though the decoder owns the frame buffer: a huge
-  // canvas would still cost decode time and diff-copy allocations downstream.
-  size_t frame_size = static_cast<size_t>(ctx.decoder_info.canvas_width) *
-                      ctx.decoder_info.canvas_height * 4;
-  if (frame_size > CONFIG_HTTP_BUFFER_SIZE_MAX) {
-    ESP_LOGE(TAG, "Decoded frame too large: %zu bytes (%ux%u)",
-             frame_size, ctx.decoder_info.canvas_width,
-             ctx.decoder_info.canvas_height);
-    ctx.decoder = WebpDecoder();
-    return false;
-  }
-
   ESP_LOGI(TAG, "Decoder created: %u frames, %ux%u",
            ctx.decoder_info.frame_count, ctx.decoder_info.canvas_width,
            ctx.decoder_info.canvas_height);
-  return true;
+  return ESP_OK;
 }
 
 //------------------------------------------------------------------------------
@@ -409,30 +520,33 @@ void send_queued_notification(int counter) {
 //------------------------------------------------------------------------------
 
 void goto_idle() {
+  // The image stays on the panel while idle; make both buffers hold it so an
+  // indicator change can flip without showing an older frame.
+  settle_panel();
   destroy_decoder();
   ctx.state.store(State::IDLE);
   xEventGroupSetBits(ctx.event_group, BIT_IDLE);
 }
 
-bool start_playback() {
+esp_err_t start_playback() {
   ctx.decode_error_count = 0;
   ctx.static_rendered = false;
 
-  if (!create_decoder()) {
-    return false;
+  esp_err_t err = create_decoder();
+  if (err != ESP_OK) {
+    return err;
   }
 
   ctx.playback_start_us = esp_timer_get_time();
-  ctx.next_frame_tick = xTaskGetTickCount();
+  ctx.next_frame_us = ctx.playback_start_us;
   ctx.state.store(State::PLAYING);
   xEventGroupClearBits(ctx.event_group, BIT_IDLE);
-  clear_error_indicator_pixel();
 
   send_displaying_notification(ctx.active_counter);
   emit_playing_event();
   ESP_LOGI(TAG, "Playback started: counter=%d, dwell=%ld",
            ctx.active_counter, static_cast<long>(ctx.dwell_secs));
-  return true;
+  return ESP_OK;
 }
 
 //------------------------------------------------------------------------------
@@ -467,7 +581,7 @@ void give_up_decode() {
     goto_idle();
     gfx_play_embedded("oversize", false);
   } else {
-    draw_error_indicator_pixel();
+    gfx_set_error_indicator(true);
     goto_idle();
   }
 }
@@ -489,7 +603,7 @@ void handle_decode_error() {
   // up immediately rather than recursing into handle_decode_error (which
   // would blow the stack if create_decoder keeps failing).
   vTaskDelay(pdMS_TO_TICKS(DECODE_RETRY_DELAY_MS));
-  if (!create_decoder()) {
+  if (create_decoder() != ESP_OK) {
     ESP_LOGE(TAG, "Decoder recreation failed, giving up");
     give_up_decode();
   }
@@ -501,14 +615,11 @@ void handle_decode_error() {
 
 void handle_pending_command(bool emit_stopped_before_replace = false) {
   if (!ctx.pending.valid.load(std::memory_order_acquire)) {
-    // No valid pending = stop command (from gfx_interrupt)
-    if (ctx.state.load() == State::PLAYING) {
-      goto_idle();
-      emit_stopped_event();
-      ESP_LOGI(TAG, "Stopped by interrupt");
-    }
     return;
   }
+
+  // Should the new image fail to start, the current one stays on the panel.
+  settle_panel();
 
   // Play command — accept pending content
   {
@@ -520,9 +631,9 @@ void handle_pending_command(bool emit_stopped_before_replace = false) {
       emit_stopped_event();
     }
 
-    // Clear stale error pixel early — before decoder creation which may fail
-    // and prevent start_playback() from reaching its own clear call.
-    clear_error_indicator_pixel();
+    // New content clears the indicator; a failure to start it raises the
+    // indicator again through the error event.
+    gfx_set_error_indicator(false);
 
     destroy_decoder();
     free_buffer();
@@ -547,7 +658,12 @@ void handle_pending_command(bool emit_stopped_before_replace = false) {
   }
 
   // Start new playback
-  if (!start_playback()) {
+  esp_err_t err = start_playback();
+  if (err == ESP_ERR_INVALID_SIZE) {
+    ESP_LOGE(TAG, "Image does not fit the %dx%d panel",
+             CONFIG_HUB75_PANEL_WIDTH, CONFIG_HUB75_PANEL_HEIGHT);
+    give_up_decode();
+  } else if (err != ESP_OK) {
     ESP_LOGE(TAG, "start_playback failed");
     emit_error_event();
     free_buffer();
@@ -557,81 +673,82 @@ void handle_pending_command(bool emit_stopped_before_replace = false) {
 
 //------------------------------------------------------------------------------
 // Frame Decode and Render
-// Returns frame delay in ms, or -1 on error
 //------------------------------------------------------------------------------
 
+// Sleep for a static image that is already on the panel: until its dwell
+// ends, re-checking at least once a minute.
+int static_sleep_ms() {
+  constexpr int MAX_SLEEP_MS = 60000;
+  if (ctx.dwell_secs <= 0) return MAX_SLEEP_MS;
+  const int64_t dwell_us = static_cast<int64_t>(ctx.dwell_secs) * 1000000;
+  const int64_t remaining_ms =
+      (dwell_us - (esp_timer_get_time() - ctx.playback_start_us)) / 1000;
+  if (remaining_ms <= 0) return 0;
+  if (remaining_ms > MAX_SLEEP_MS) return MAX_SLEEP_MS;
+  return static_cast<int>(remaining_ms);
+}
+
+// Returns the time until the next frame in ms, or -1 on error.
 int decode_and_render_frame() {
   if (!ctx.decoder.is_valid()) return -1;
 
-  // Static images: after the first render, the DMA buffer holds the frame.
+  // Static images: after the first render, the DMA buffers hold the frame.
   // Skip decode and display writes; just compute the sleep duration.
   if (!ctx.decoder_info.is_animated && ctx.static_rendered) {
-    if (ctx.dwell_secs > 0) {
-      int64_t dwell_us = static_cast<int64_t>(ctx.dwell_secs) * 1000000;
-      int64_t elapsed_us = esp_timer_get_time() - ctx.playback_start_us;
-      int64_t remaining_us = dwell_us - elapsed_us;
-      if (remaining_us > 0) {
-        uint32_t remaining_ms = static_cast<uint32_t>(remaining_us / 1000);
-        return static_cast<int>(remaining_ms > 60000 ? 60000 : remaining_ms);
-      }
-      return 0;
-    }
-    return 60000;  // Unlimited duration: sleep up to 60s per iteration
+    return static_sleep_ms();
   }
 
   const uint8_t* frame = nullptr;
   if (ctx.decoder.get_next_frame(&frame) != ESP_OK) {
+    // A failed decode may have left the canvas half written.
+    ctx.current_frame = nullptr;
     return -1;
   }
-
-  // Reset error count on successful decode
+  ctx.current_frame = frame;
   ctx.decode_error_count = 0;
 
-  // Render frame, skipping unchanged content
-  render_frame_diffed(frame, ctx.decoder_info.canvas_width,
-                      ctx.decoder_info.canvas_height);
+  render_frame(frame, ctx.decoder_info.canvas_width,
+               ctx.decoder_info.canvas_height);
 
-  int delay_ms = static_cast<int>(ctx.decoder.get_frame_delay());
-
-  // Static image: mark as rendered and compute remaining dwell time.
   if (!ctx.decoder_info.is_animated) {
     ctx.static_rendered = true;
-    if (ctx.dwell_secs > 0) {
-      int64_t dwell_us = static_cast<int64_t>(ctx.dwell_secs) * 1000000;
-      int64_t elapsed_us = esp_timer_get_time() - ctx.playback_start_us;
-      int64_t remaining_us = dwell_us - elapsed_us;
-      if (remaining_us > 0) {
-        uint32_t remaining_ms = static_cast<uint32_t>(remaining_us / 1000);
-        delay_ms = static_cast<int>(
-            remaining_ms > 60000 ? 60000 : remaining_ms);
-      } else {
-        delay_ms = 0;
-      }
-    } else {
-      delay_ms = 60000;  // Unlimited duration: sleep up to 60s per iteration
-    }
+    settle_panel();
+    return static_sleep_ms();
   }
 
+  const int delay_ms = static_cast<int>(ctx.decoder.get_frame_delay());
   return (delay_ms > 0) ? delay_ms : 1;
 }
 
 //------------------------------------------------------------------------------
-// Calculate Wait Ticks (drift-free timing)
+// Frame Timing
 //------------------------------------------------------------------------------
+// Deadlines are absolute and kept in microseconds so tick rounding never
+// accumulates: at 250 Hz a 50 ms frame is not a whole number of ticks, and
+// per-frame tick math ran animations up to 25% fast.
 
-TickType_t calculate_wait_ticks(int delay_ms) {
-  if (delay_ms <= 0) return 0;
-
-  TickType_t target = ctx.next_frame_tick + pdMS_TO_TICKS(delay_ms);
-  TickType_t now = xTaskGetTickCount();
-
-  if (now >= target) {
-    ctx.next_frame_tick = now;
-    return 0;
+void schedule_next_frame(int delay_ms) {
+  ctx.next_frame_us += static_cast<int64_t>(delay_ms) * 1000;
+  // Behind schedule (slow decode): restart the schedule from now rather than
+  // rushing through frames to catch up.
+  const int64_t now = esp_timer_get_time();
+  if (ctx.next_frame_us < now) {
+    ctx.next_frame_us = now;
   }
+}
 
-  ctx.next_frame_tick = target;
-  return target - now;
+// A tick-based wait can only end within one tick of a deadline, so a frame
+// that close counts as due.
+bool frame_due() {
+  return ctx.next_frame_us - esp_timer_get_time() < TICK_US;
+}
+
+// Always at least one tick, so the task blocks every iteration even when
+// decoding cannot keep up, and IDLE on this core still gets to run.
+TickType_t ticks_until_next_frame() {
+  const int64_t remaining_us = ctx.next_frame_us - esp_timer_get_time();
+  if (remaining_us <= TICK_US) return 1;
+  return static_cast<TickType_t>((remaining_us + TICK_US - 1) / TICK_US);
 }
 
 //------------------------------------------------------------------------------
@@ -639,7 +756,7 @@ TickType_t calculate_wait_ticks(int delay_ms) {
 //------------------------------------------------------------------------------
 
 void display_version_info(const char* img_url) {
-  invalidate_prev_frame();
+  forget_panel_content();
   display_clear();
   char version_text[32];
   snprintf(version_text, sizeof(version_text), "v%s", FIRMWARE_VERSION);
@@ -721,6 +838,10 @@ void player_task(void*) {
     //UBaseType_t stack_free = uxTaskGetStackHighWaterMark(NULL);
     //ESP_LOGI(TAG, "Stack remaining: %u bytes", stack_free);
 
+    if (ctx.foreign_draw.exchange(false)) {
+      forget_panel_content();
+    }
+
     State state = ctx.state.load();
 
     // --- IDLE: block until command ---
@@ -729,24 +850,28 @@ void player_task(void*) {
       ctx.interrupt_request.store(InterruptRequest::NONE,
                                   std::memory_order_relaxed);
 
-      // If content is already pending (queued while PLAYING), consume it
-      // immediately without waiting for a new task notification.
-      if (ctx.pending.valid.load(std::memory_order_acquire)) {
-        if (ctx.paused.load()) continue;
-        handle_pending_command();
-        continue;
+      // While stopped, pending content waits for gfx_start(), and so does the
+      // indicator: the panel belongs to whoever stopped the player. Either way
+      // the task blocks below instead of polling.
+      const bool paused = ctx.paused.load();
+      if (!paused) {
+        // Content queued while PLAYING is consumed without waiting for a new
+        // notification.
+        if (ctx.pending.valid.load(std::memory_order_acquire)) {
+          handle_pending_command();
+          continue;
+        }
+        refresh_indicator_idle();
       }
 
       // Use a periodic wake-up instead of infinite block so we can detect
       // stale pending commands that arrived without a notification.
       constexpr TickType_t IDLE_POLL_TICKS = pdMS_TO_TICKS(30000);
       uint32_t got = ulTaskNotifyTake(pdTRUE, IDLE_POLL_TICKS);
-      if (!got && ctx.pending.valid.load(std::memory_order_acquire)) {
+      if (!got && !ctx.paused.load() &&
+          ctx.pending.valid.load(std::memory_order_acquire)) {
         ESP_LOGW(TAG, "Idle wake: stale pending command detected, consuming");
       }
-
-      if (ctx.paused.load()) continue;
-      handle_pending_command();
       continue;
     }
 
@@ -772,21 +897,20 @@ void player_task(void*) {
       continue;
     }
 
-    // Decode and render one frame
-    int delay_ms = decode_and_render_frame();
-    if (delay_ms < 0) {
-      handle_decode_error();
-      continue;
+    // Decode and render one frame. A wake-up before the frame is due (a
+    // queued image, an indicator change) must not advance the animation.
+    if (frame_due()) {
+      int delay_ms = decode_and_render_frame();
+      if (delay_ms < 0) {
+        handle_decode_error();
+        continue;
+      }
+      schedule_next_frame(delay_ms);
     }
+    refresh_indicator_playing();
 
-    // Yield to prevent watchdog timeout on rapid frame sequences
-    if (delay_ms <= 1) {
-      taskYIELD();
-    }
-
-    // Wait for frame delay OR notification
-    TickType_t wait_ticks = calculate_wait_ticks(delay_ms);
-    uint32_t notified = ulTaskNotifyTake(pdTRUE, wait_ticks);
+    // Wait for the next frame OR a notification
+    uint32_t notified = ulTaskNotifyTake(pdTRUE, ticks_until_next_frame());
 
     if (notified) {
       InterruptRequest req = ctx.interrupt_request.exchange(
@@ -810,11 +934,9 @@ void player_task(void*) {
         }
         continue;
       }
-      if (!ctx.pending.valid.load(std::memory_order_acquire)) {
-        handle_pending_command();
-      }
-      // else: image queued but dwell not expired — ignore, loop will
-      // pick it up after check_dwell_expired() fires above.
+      // Any other notification is a plain wake-up: a queued image waits for
+      // the dwell to expire, and pause / indicator changes are picked up at
+      // the top of the loop.
     }
   }
 }
@@ -872,10 +994,14 @@ int gfx_initialize(const char* img_url) {
   }
 
   // Pre-initialize decoder so task starts in PLAYING state
-  if (create_decoder()) {
+  if (create_decoder() == ESP_OK) {
     ctx.playback_start_us = esp_timer_get_time();
-    ctx.next_frame_tick = xTaskGetTickCount();
+    ctx.next_frame_us = ctx.playback_start_us;
     ctx.state.store(State::PLAYING);
+  } else {
+    // Nothing to play (boot animation skipped): idle from the start, or
+    // gfx_wait_idle() would wait for a transition that never comes.
+    xEventGroupSetBits(ctx.event_group, BIT_IDLE);
   }
 
   BaseType_t ret = xTaskCreatePinnedToCore(
@@ -987,7 +1113,7 @@ int gfx_display_asset(const char* asset_type) {
 
 void gfx_display_text(const char* text, int x, int y, uint8_t r, uint8_t g,
                       uint8_t b, int scale) {
-  invalidate_prev_frame();
+  ctx.foreign_draw.store(true);
   display_text(text, x, y, r, g, b, scale);
 }
 
@@ -998,8 +1124,8 @@ void gfx_stop(void) {
 }
 
 void gfx_start(void) {
-  // Other code (OTA screens, error paths) may have drawn while paused.
-  invalidate_prev_frame();
+  // Other code (OTA screens, quiet hours) may have drawn while paused.
+  ctx.foreign_draw.store(true);
   ctx.paused.store(false);
   if (ctx.task) xTaskNotifyGive(ctx.task);
   ESP_LOGI(TAG, "Resumed");
@@ -1027,10 +1153,25 @@ void gfx_preempt(void) {
   if (ctx.task) xTaskNotifyGive(ctx.task);
 }
 
-void gfx_wait_idle(void) {
-  if (!ctx.event_group) return;
-  xEventGroupWaitBits(ctx.event_group, BIT_IDLE, pdFALSE, pdTRUE,
-                      portMAX_DELAY);
+bool gfx_wait_idle(void) {
+  if (!ctx.event_group) return true;
+  if (xTaskGetCurrentTaskHandle() == ctx.task) return false;
+  const EventBits_t bits =
+      xEventGroupWaitBits(ctx.event_group, BIT_IDLE, pdFALSE, pdTRUE,
+                          pdMS_TO_TICKS(WAIT_IDLE_TIMEOUT_MS));
+  if (bits & BIT_IDLE) return true;
+  ESP_LOGW(TAG, "Player not idle after %lu ms",
+           static_cast<unsigned long>(WAIT_IDLE_TIMEOUT_MS));
+  return false;
+}
+
+void gfx_set_error_indicator(bool on) {
+  if (ctx.indicator_wanted.exchange(on) == on) return;
+  // The player applies the change itself. It is only woken from other tasks:
+  // a self-notification would cut its next frame wait short for nothing.
+  if (ctx.task && xTaskGetCurrentTaskHandle() != ctx.task) {
+    xTaskNotifyGive(ctx.task);
+  }
 }
 
 bool gfx_is_animating(void) {
