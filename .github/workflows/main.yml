@@ -17,7 +17,9 @@ jobs:
   quality:
     name: Quality Gates
     runs-on: ubuntu-latest
-    container: espressif/idf:latest
+    # Pinned ESP-IDF master image (built 2026-09-25). Bump the digest on purpose
+    # and rebuild every board when moving to a newer IDF.
+    container: espressif/idf@sha256:14636bd86a66be991e297a1075d8bf89d113a68f9c747b974ef26373376e6d39
     env:
       IDF_CCACHE_ENABLE: "1"
 
@@ -47,9 +49,17 @@ jobs:
             components/assets
 
       - name: Fetch Managed Components
+        shell: bash
         run: |
+          set -o pipefail
           . $IDF_PATH/export.sh
-          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tronbyt-s3" set-target esp32s3 reconfigure
+          idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tronbyt-s3" set-target esp32s3 reconfigure 2>&1 | tee reconfigure.log
+          # The component manager only re-solves when dependencies.lock no longer
+          # matches the idf_component.yml manifests. Builds must use the committed lock.
+          if grep -q "solving dependencies" reconfigure.log; then
+            echo "::error::dependencies.lock is out of date. Build any board locally and commit the updated lock."
+            exit 1
+          fi
 
       - name: Host Tests
         run: bash test/host/run_tests.sh
@@ -58,7 +68,9 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: quality
     runs-on: ubuntu-latest
-    container: espressif/idf:latest
+    # Pinned ESP-IDF master image (built 2026-09-25). Bump the digest on purpose
+    # and rebuild every board when moving to a newer IDF.
+    container: espressif/idf@sha256:14636bd86a66be991e297a1075d8bf89d113a68f9c747b974ef26373376e6d39
     strategy:
       fail-fast: false
       matrix:

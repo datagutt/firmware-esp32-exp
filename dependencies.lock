@@ -1,0 +1,80 @@
+dependencies:
+  esp-hub75:
+    component_hash: 56c8689101e3ace28044f9b4dfa9d7403cbd6158e41ad45605404c5bfdf933d8
+    dependencies:
+    - name: idf
+      version: '>=4.4.0'
+    source:
+      git: https://github.com/datagutt/esp-hub75.git
+      path: components/hub75
+      type: git
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32c6
+    - esp32p4
+    version: 0868f293cc99d2fb754f8378f0b528f7798e8d7e
+  esp_websocket_client:
+    component_hash: d0dd36f156cb69c846b455237bcab20ef8410564de37fd03f4c7ca411ee8a894
+    dependencies:
+    - name: idf
+      version: '>=5.0'
+    source:
+      git: https://github.com/datagutt/esp_websocket_client.git
+      path: .
+      type: git
+    version: 781368db61dded949a92b54bd87451dd497fa775
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~2
+  espressif/mdns:
+    component_hash: b679eafd0acae2066e2645bd91d073e33ca5be515e2545cd3c4e55a3e3bce3cb
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.13.1
+  idf:
+    source:
+      type: idf
+    version: 6.2.0
+  joltwallet/littlefs:
+    component_hash: 3af20a3d75c49db9dc2286fd50862c34055c9f578419ad1f2bf7ed3ed01391fe
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.22.3
+  libwebp:
+    component_hash: 5b3a312ef4ac269a2e9fa45c911b9cb72cdaecb2eca622684a0e783629dfe2ff
+    dependencies: []
+    source:
+      git: https://github.com/datagutt/libwebp.git
+      path: .
+      type: git
+    version: abe43c16a565172f2f3ad9d1582aeffc19a4cdbe
+direct_dependencies:
+- esp-hub75
+- esp_websocket_client
+- espressif/cjson
+- espressif/mdns
+- idf
+- joltwallet/littlefs
+- libwebp
+manifest_hash: 48360002ae24e13d434876885c1d9009b92a8027cef348096dafb402aee76d37
+target: esp32
+version: 3.0.0

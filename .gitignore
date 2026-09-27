@@ -7,7 +7,6 @@ _secrets.json.injected
 .production
 .vscode/*
 build
-dependencies.lock
 eim_config.toml
 managed_components
 sdkconfig
