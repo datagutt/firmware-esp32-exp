@@ -8,13 +8,16 @@
 // Concurrency model:
 //   - `ctx.mutex` serializes every read/write to `ctx`.
 //   - All public entry points (scheduler_on_*, scheduler_start_*,
-//     scheduler_stop), the two esp_timer callbacks, and player_event_handler
-//     take the lock at the boundary.
+//     scheduler_stop), the two esp_timer callbacks, player_event_handler and
+//     fetch_done_handler take the lock at the boundary.
 //   - Internal helpers (transition_to, http_trigger_fetch,
 //     http_apply_prefetch, etc.) do NOT take the lock; they run with the
 //     caller's lock held.
-//   - http_fetch_task does the network request without the lock, then
-//     briefly takes the lock to publish results into ctx.prefetch.
+//   - The http_fetch worker does the network request without the lock, then
+//     briefly takes the lock to publish results into ctx.prefetch. It never
+//     applies them itself: its stack is in PSRAM, and applying writes NVS, so
+//     it posts FETCH_DONE_EVENT and fetch_done_handler applies the result on
+//     the default event loop task.
 
 #include "scheduler.h"
 
@@ -63,6 +66,11 @@ constexpr int32_t DEFAULT_REFRESH_INTERVAL = 10;
 #else
 constexpr int32_t DEFAULT_REFRESH_INTERVAL = CONFIG_REFRESH_INTERVAL_SECONDS;
 #endif
+
+// Posted to the default event loop by the fetch worker when a result is ready
+// to apply.
+ESP_EVENT_DEFINE_BASE(SCHEDULER_EVENTS);
+constexpr int32_t FETCH_DONE_EVENT = 0;
 
 // ---------------------------------------------------------------------------
 // Mode & State
@@ -148,6 +156,7 @@ struct Context {
   // HTTP prefetch
   PrefetchResult prefetch;
   TaskHandle_t fetch_task = nullptr;
+  bool fetch_in_flight = false;
 
   // Synchronization
   SemaphoreHandle_t mutex = nullptr;
@@ -215,13 +224,14 @@ void ota_task_entry(void* param) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP fetch task
+// HTTP fetch worker
 // ---------------------------------------------------------------------------
 
-void http_fetch_task(void* param) {
-  (void)param;
-
-  // Phase 1 — read inputs we need under the lock.
+// One fetch cycle on the worker task. The worker's stack lives in PSRAM, which
+// is unreachable while the flash cache is disabled, so nothing here may write
+// flash. fetch_done_handler applies the result (NVS writes, OTA start,
+// rendering) on the default event loop task, whose stack is internal.
+void http_fetch_once() {
   char* http_url_copy = nullptr;
   // Seed from the level the panel is actually at, not ctx: remote_get() only
   // overwrites this when the response carries a valid Tronbyt-Brightness, so a
@@ -230,20 +240,15 @@ void http_fetch_task(void* param) {
   uint8_t brightness_pct = display_get_brightness();
   {
     raii::MutexGuard lock(ctx.mutex);
-    if (lock) {
-      if (ctx.http_url) http_url_copy = strdup(ctx.http_url);
+    if (!lock) return;
+    if (ctx.http_url) http_url_copy = strdup(ctx.http_url);
+    if (!http_url_copy) {
+      ESP_LOGW(TAG, "Fetch aborted: no URL (scheduler stopped?)");
+      ctx.fetch_in_flight = false;
+      return;
     }
   }
 
-  if (!http_url_copy) {
-    ESP_LOGW(TAG, "Fetch aborted: no URL (scheduler stopped?)");
-    raii::MutexGuard lock(ctx.mutex);
-    if (lock) ctx.fetch_task = nullptr;
-    vTaskDelete(nullptr);
-    return;
-  }
-
-  // Phase 2 — perform the network request without holding the lock.
   uint8_t* webp = nullptr;
   size_t len = 0;
   int32_t dwell_secs = 0;
@@ -259,62 +264,94 @@ void http_fetch_task(void* param) {
                         &reboot_requested);
   free(http_url_copy);
 
-  // Phase 3 — publish result and decide what to do, under the lock.
-  raii::MutexGuard lock(ctx.mutex);
-  if (!lock) {
-    if (webp) free(webp);
-    if (ota_url) free(ota_url);
-    if (image_url) free(image_url);
-    vTaskDelete(nullptr);
-    return;
-  }
+  bool needs_apply = false;
+  {
+    raii::MutexGuard lock(ctx.mutex);
+    if (!lock) return;
+    ctx.fetch_in_flight = false;
 
-  // If scheduler was stopped while we were fetching, discard the result.
-  if (ctx.mode != Mode::HTTP) {
-    if (webp) free(webp);
-    if (ota_url) free(ota_url);
-    if (image_url) free(image_url);
+    // Not in HTTP mode means scheduler_stop() ran mid-fetch: the result is
+    // dropped and freed below.
+    if (ctx.mode == Mode::HTTP) {
+      ctx.prefetch.clear();
+      ctx.prefetch.webp = webp;
+      ctx.prefetch.len = len;
+      ctx.prefetch.brightness_pct = brightness_pct;
+      ctx.prefetch.dwell_secs = dwell_secs;
+      ctx.prefetch.status_code = status_code;
+      ctx.prefetch.ota_url = ota_url;
+      ctx.prefetch.image_url = image_url;
+      ctx.prefetch.reboot_requested = reboot_requested;
+      ctx.prefetch.failed = !ok;
+      ctx.prefetch.ready.store(true);
+      webp = nullptr;
+      ota_url = nullptr;
+      image_url = nullptr;
+
+      needs_apply = ctx.state == State::HTTP_FETCHING ||
+                    ctx.state == State::HTTP_PREFETCHING;
+    }
+  }
+  free(webp);
+  free(ota_url);
+  free(image_url);
+
+  if (!needs_apply) return;
+
+  esp_err_t err = esp_event_post(SCHEDULER_EVENTS, FETCH_DONE_EVENT, nullptr,
+                                 0, portMAX_DELAY);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to post fetch result: %s", esp_err_to_name(err));
+    raii::MutexGuard lock(ctx.mutex);
+    if (lock && ctx.mode == Mode::HTTP) {
+      ctx.prefetch.clear();
+      start_retry_timer();
+      transition_to(State::IDLE);
+    }
+  }
+}
+
+void http_fetch_worker(void*) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    http_fetch_once();
+  }
+}
+
+// Created on first use so WebSocket-mode devices never pay for its stack, then
+// kept for good: HTTP mode fetches every dwell, and recreating an 8 KB task
+// each time only churns the heap.
+bool start_fetch_worker() {
+  BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
+      http_fetch_worker, "http_fetch", 8192, nullptr, 3, &ctx.fetch_task, 0,
+      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (rc != pdPASS) {
+    rc = xTaskCreatePinnedToCore(http_fetch_worker, "http_fetch", 8192,
+                                 nullptr, 3, &ctx.fetch_task, 0);
+  }
+  if (rc != pdPASS) {
     ctx.fetch_task = nullptr;
-    vTaskDelete(nullptr);
-    return;
+    ESP_LOGE(TAG, "Failed to create HTTP fetch task");
+    return false;
   }
-
-  ctx.prefetch.clear();
-  ctx.prefetch.webp = webp;
-  ctx.prefetch.len = len;
-  ctx.prefetch.brightness_pct = brightness_pct;
-  ctx.prefetch.dwell_secs = dwell_secs;
-  ctx.prefetch.status_code = status_code;
-  ctx.prefetch.ota_url = ota_url;
-  ctx.prefetch.image_url = image_url;
-  ctx.prefetch.reboot_requested = reboot_requested;
-  ctx.prefetch.failed = !ok;
-  ctx.prefetch.ready.store(true);
-
-  if (ctx.state == State::HTTP_FETCHING ||
-      ctx.state == State::HTTP_PREFETCHING) {
-    http_apply_prefetch();
-  }
-
-  ctx.fetch_task = nullptr;
-  vTaskDelete(nullptr);
+  return true;
 }
 
 void http_trigger_fetch() {
-  if (ctx.fetch_task) {
+  if (ctx.fetch_in_flight) {
     ESP_LOGW(TAG, "Fetch already in progress");
     return;
   }
-
-  BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
-      http_fetch_task, "http_fetch", 8192, nullptr, 3,
-      &ctx.fetch_task, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (rc != pdPASS) {
-    xTaskCreatePinnedToCore(http_fetch_task, "http_fetch", 8192, nullptr, 3,
-                            &ctx.fetch_task, 0);
+  if (!ctx.fetch_task && !start_fetch_worker()) {
+    start_retry_timer();
+    return;
   }
+  ctx.fetch_in_flight = true;
+  xTaskNotifyGive(ctx.fetch_task);
 }
 
+// Must run on a task with an internal-RAM stack: it persists settings to NVS
+// (brightness, Tronbyt-Image-URL) and may start an OTA.
 void http_apply_prefetch() {
   if (!ctx.prefetch.ready.load()) return;
   if (ctx.mode != Mode::HTTP) {
@@ -624,6 +661,19 @@ void player_event_handler(void*, esp_event_base_t, int32_t event_id,
   }
 }
 
+// Unlike player_event_handler this also runs while paused: the quiet-hours
+// poll result must still be seen so a server-cleared quiet signal is noticed.
+void fetch_done_handler(void*, esp_event_base_t, int32_t, void*) {
+  raii::MutexGuard lock(ctx.mutex);
+  if (!lock) return;
+  // on_player_stopped may already have applied it; http_apply_prefetch is a
+  // no-op once the result is consumed.
+  if (ctx.state == State::HTTP_FETCHING ||
+      ctx.state == State::HTTP_PREFETCHING) {
+    http_apply_prefetch();
+  }
+}
+
 // Display-power events drive quiet hours: OFF pauses and blanks, ON resumes.
 void display_power_event_handler(const tronbyt_event_t* event, void*) {
   if (!event) return;
@@ -664,6 +714,8 @@ void scheduler_init() {
   // Register for player events
   esp_event_handler_register(GFX_PLAYER_EVENTS, ESP_EVENT_ANY_ID,
                              player_event_handler, nullptr);
+  esp_event_handler_register(SCHEDULER_EVENTS, FETCH_DONE_EVENT,
+                             fetch_done_handler, nullptr);
 
   // React to quiet-hours display-power transitions.
   event_bus_subscribe(TRONBYT_EVENT_DISPLAY_OFF, display_power_event_handler,
