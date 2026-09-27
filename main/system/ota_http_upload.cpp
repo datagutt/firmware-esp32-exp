@@ -47,7 +47,11 @@ class UploadSession {
 
   char* buf() const { return buf_; }
 
+  // Called once the upload's head has validated, so a stray or broken upload
+  // does not end the running image's trial.
   esp_err_t begin(const esp_partition_t* part, size_t size) {
+    esp_err_t err = ota_confirm_for_update();
+    if (err != ESP_OK) return err;
     return esp_ota_begin(part, size, &handle_);
   }
   esp_err_t write(const void* data, size_t len) {

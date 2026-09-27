@@ -13,6 +13,7 @@
 #include <esp_system.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <lwip/netdb.h>
 #include <lwip/sockets.h>
@@ -23,6 +24,7 @@
 #include "event_bus.h"
 #include "http_slot.h"
 #include "ota_url_utils.h"
+#include "raii_utils.hpp"
 #include "scheduler.h"
 #include "webp_player.h"
 
@@ -41,6 +43,10 @@ std::atomic<bool> s_health_pending{false};
 bool s_health_needs_server = false;
 esp_timer_handle_t s_confirm_timer = nullptr;
 esp_timer_handle_t s_rollback_timer = nullptr;
+// Serializes the otadata writes that end a trial: the confirm and rollback
+// timers run on the esp_timer task, ota_confirm_for_update() on the task that
+// is about to write an update.
+SemaphoreHandle_t s_health_lock = nullptr;
 
 bool is_ip_private(const struct sockaddr* addr) {
   if (addr->sa_family == AF_INET) {
@@ -161,22 +167,32 @@ bool running_app_pending_verify() {
          state == ESP_OTA_IMG_PENDING_VERIFY;
 }
 
+// Ends the trial. Caller holds s_health_lock.
+esp_err_t confirm_running_app(const char* reason) {
+  s_health_pending.store(false);
+  if (s_rollback_timer) esp_timer_stop(s_rollback_timer);
+  esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+  if (err == ESP_OK) {
+    ESP_LOGI(TAG, "OTA image confirmed valid (%s); rollback cancelled",
+             reason);
+    diag_event_log("INFO", "ota_confirmed", 0, reason);
+  } else {
+    ESP_LOGE(TAG, "Failed to mark OTA app valid: %s", esp_err_to_name(err));
+    diag_event_log("ERROR", "ota_confirm_fail", err, "mark_app_valid failed");
+  }
+  return err;
+}
+
 // Both timer callbacks write otadata, so they run on the esp_timer task
 // (internal stack) and never on the event bus task, whose stack may be PSRAM.
-// Sharing that task also serializes confirm against rollback.
 void confirm_timer_cb(void*) {
-  if (!s_health_pending.exchange(false)) return;
-  if (s_rollback_timer) esp_timer_stop(s_rollback_timer);
-  if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-    ESP_LOGI(TAG, "OTA image confirmed valid; rollback cancelled");
-    diag_event_log("INFO", "ota_confirmed", 0, "App marked valid after boot");
-  } else {
-    ESP_LOGE(TAG, "Failed to mark OTA app valid");
-    diag_event_log("ERROR", "ota_confirm_fail", -1, "mark_app_valid failed");
-  }
+  raii::MutexGuard lock(s_health_lock);
+  if (!s_health_pending.load()) return;
+  confirm_running_app("App marked valid after boot");
 }
 
 void rollback_timer_cb(void*) {
+  raii::MutexGuard lock(s_health_lock);
   if (!s_health_pending.load()) return;
   ESP_LOGE(TAG, "New firmware not confirmed healthy within %llu s; rolling back",
            kHealthTimeoutUs / 1000000ULL);
@@ -264,6 +280,12 @@ void ota_start_health_check(bool server_configured) {
 
   s_health_needs_server = server_configured;
 
+  s_health_lock = xSemaphoreCreateMutex();
+  if (!s_health_lock) {
+    ESP_LOGE(TAG, "Failed to create OTA health check lock");
+    return;
+  }
+
   esp_timer_create_args_t confirm_args = {};
   confirm_args.callback = confirm_timer_cb;
   confirm_args.name = "ota_confirm";
@@ -297,6 +319,14 @@ void ota_start_health_check(bool server_configured) {
            "after %llu s otherwise",
            server_configured ? "the server is reached" : "WiFi connects",
            kHealthTimeoutUs / 1000000ULL);
+}
+
+esp_err_t ota_confirm_for_update(void) {
+  // Without a health check there is no lock, and nothing else writes otadata.
+  raii::MutexGuard lock(s_health_lock);
+  if (!running_app_pending_verify()) return ESP_OK;
+  ESP_LOGW(TAG, "Running image is still on trial; confirming it for an update");
+  return confirm_running_app("Confirmed to install an update");
 }
 
 void run_ota(const char* url) {
@@ -359,6 +389,14 @@ void run_ota(const char* url) {
     ESP_LOGE(TAG, "Could not acquire HTTP slot for OTA; aborting update");
     diag_event_log("ERROR", "ota_slot_busy", -1,
                    "OTA aborted: shared HTTP slot stayed busy");
+    fail_update();
+    return;
+  }
+
+  // The URL came from the server, so the running image has reached it. The
+  // health check's confirm event can still be queued behind this task, and
+  // esp_https_ota_begin() would refuse until it lands.
+  if (ota_confirm_for_update() != ESP_OK) {
     fail_update();
     return;
   }
