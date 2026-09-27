@@ -12,7 +12,10 @@
 
 #include "touch_control.h"
 
+#include <atomic>
 #include <cstring>
+
+#include "beep.h"
 
 namespace {
 
@@ -59,6 +62,13 @@ struct TouchState {
 };
 
 TouchState g_touch;
+std::atomic<bool> s_beep_enabled{false};
+
+void feedback(beep_kind_t kind) {
+  if (s_beep_enabled.load(std::memory_order_relaxed)) {
+    beep_play(kind);
+  }
+}
 
 uint32_t get_time_ms() {
   return static_cast<uint32_t>(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -198,6 +208,9 @@ touch_event_t touch_control_check(void) {
         } else if (g_touch.is_late_tap) {
           g_touch.state = FsmState::IDLE;
         } else if (duration >= MIN_TAP_DURATION_MS) {
+          // Feedback on release: TOUCH_EVENT_TAP only fires once the
+          // double-tap window has expired, too late to feel responsive
+          feedback(BEEP_TAP);
           g_touch.release_time = now;
           g_touch.state = FsmState::WAIT_FOR_DOUBLE_TAP;
         } else {
@@ -207,6 +220,7 @@ touch_event_t touch_control_check(void) {
         uint32_t duration = now - g_touch.touch_start_time;
         if (duration >= TOUCH_HOLD_MS) {
           event = TOUCH_EVENT_HOLD;
+          feedback(BEEP_HOLD);
           g_touch.state = FsmState::HOLD_FIRED;
           g_touch.last_event_time = now;
         }
@@ -299,6 +313,10 @@ uint16_t touch_control_read_raw(void) {
 }
 
 bool touch_control_is_initialized(void) { return g_touch.initialized; }
+
+void touch_control_set_beep(bool enabled) {
+  s_beep_enabled.store(enabled, std::memory_order_relaxed);
+}
 
 const char* touch_event_to_string(touch_event_t event) {
   switch (event) {

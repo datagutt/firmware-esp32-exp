@@ -178,6 +178,15 @@ menu "Application Configuration"
             Not yet supported on ESP32/S2 (I2S) — leave disabled for those
             targets to avoid a 50ms per-frame timeout penalty.
 
+    config TOUCH_BEEP_DEFAULT
+        bool "Beep On Touch By Default"
+        default n
+        depends on BOARD_TIDBYT_GEN2
+        help
+            Play a short tone on the built-in speaker when the touch button
+            is tapped or held.
+            Can still be toggled via NVS, WebSocket, or the config portal.
+
     config ENABLE_CONSOLE
         bool "Enable UART Console"
         default y

@@ -102,6 +102,8 @@ The firmware supports several advanced settings stored in Non-Volatile Storage (
 | **AP Mode** | `ap_mode` | Boolean (0/1) to enable/disable the fallback WiFi configuration portal. |
 | **WiFi Power Save**| `wifi_ps` | WiFi power management mode (0: None, 1: Min, 2: Max). |
 | **Prefer IPv6** | `prefer_ipv6` | Boolean (0/1) to prefer IPv6 connectivity over IPv4. |
+| **Disable Touch** | `dis_touch` | Boolean (0/1) to turn off the touch button (Tidbyt Gen2 only, applies after a reboot). |
+| **Touch Beep** | `touch_beep` | Boolean (0/1) to play a short tone on the speaker when the touch button is tapped or held (Tidbyt Gen2 only). |
 
 ## Back to Normal
 
@@ -165,6 +167,8 @@ The device connects to the server via WebSocket. Messages are handled as follows
 | `skip_display_version` | bool | Skip version display on boot (persisted to NVS) |
 | `ap_mode` | bool | Enable/disable config portal AP (persisted to NVS) |
 | `prefer_ipv6` | bool | Prefer IPv6 connectivity (persisted to NVS) |
+| `disable_touch` | bool | Turn off the touch button, Tidbyt Gen2 only, applies after a reboot (persisted to NVS) |
+| `touch_beep` | bool | Beep when the touch button is tapped or held, Tidbyt Gen2 only (persisted to NVS) |
 | `hostname` | string | Device hostname (persisted to NVS) |
 | `syslog_addr` | string | Syslog server `host:port` (persisted to NVS) |
 | `sntp_server` | string | Custom NTP server (persisted to NVS) |

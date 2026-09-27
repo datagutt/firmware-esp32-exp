@@ -47,6 +47,9 @@ void touch_control_calibrate(void);
 void touch_control_debug_all_pads(void);
 uint16_t touch_control_read_raw(void);
 bool touch_control_is_initialized(void);
+// Play a tone on the speaker when a tap or hold is recognized. Safe to call
+// from any task.
+void touch_control_set_beep(bool enabled);
 const char* touch_event_to_string(touch_event_t event);
 
 #ifdef __cplusplus

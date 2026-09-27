@@ -189,6 +189,7 @@ void process_text_message(const char* json_str) {
                                       "skip_display_version",
                                       "skip_boot_animation",
                                       "ap_mode",         "prefer_ipv6",
+                                      "disable_touch",   "touch_beep",
                                       "hostname",        "syslog_addr",
                                       "sntp_server",     "image_url",
                                       "api_key",         "quiet_hours",
@@ -374,6 +375,14 @@ void process_text_message(const char* json_str) {
     bool val = cJSON_IsTrue(disable_touch_item);
     cfg.disable_touch = val;
     ESP_LOGI(TAG, "Updated disable_touch to %d", val);
+    settings_changed = true;
+  }
+
+  cJSON* touch_beep_item = cJSON_GetObjectItem(root, "touch_beep");
+  if (cJSON_IsBool(touch_beep_item)) {
+    bool val = cJSON_IsTrue(touch_beep_item);
+    cfg.touch_beep = val;
+    ESP_LOGI(TAG, "Updated touch_beep to %d", val);
     settings_changed = true;
   }
 

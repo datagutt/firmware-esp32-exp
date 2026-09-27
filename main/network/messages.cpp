@@ -78,6 +78,7 @@ esp_err_t msg_send_client_info_now() {
   cJSON_AddBoolToObject(ci, "ap_mode", cfg.ap_mode);
   cJSON_AddBoolToObject(ci, "prefer_ipv6", cfg.prefer_ipv6);
   cJSON_AddBoolToObject(ci, "disable_touch", cfg.disable_touch);
+  cJSON_AddBoolToObject(ci, "touch_beep", cfg.touch_beep);
 
   char* json_str = cJSON_PrintUnformatted(root);
   if (json_str) {

@@ -95,6 +95,12 @@ void on_brightness_changed(const tronbyt_event_t* event, void*) {
   display_power_on = true;
   saved_brightness = static_cast<uint8_t>(event->payload.i32);
 }
+
+// touch_beep can change at runtime (WebSocket, config portal) and takes effect
+// without a reboot, unlike disable_touch.
+void on_config_changed(const tronbyt_event_t*, void*) {
+  touch_control_set_beep(config_get().touch_beep);
+}
 #endif
 
 }  // namespace
@@ -169,6 +175,9 @@ extern "C" void app_main(void) {
     if (touch_ret == ESP_OK) {
       ESP_LOGI(TAG, "Touch control ready on GPIO33");
       touch_control_debug_all_pads();
+      touch_control_set_beep(cfg.touch_beep);
+      event_bus_subscribe(TRONBYT_EVENT_CONFIG_CHANGED, on_config_changed,
+                          nullptr);
 
       xTaskCreate(touch_task, "touch_poll", 2048, nullptr, 2, nullptr);
       // Touch is active: keep its on/off + saved-brightness state in sync with

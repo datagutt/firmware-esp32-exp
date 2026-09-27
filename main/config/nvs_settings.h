@@ -32,6 +32,7 @@ typedef struct {
   bool ap_mode;
   bool prefer_ipv6;
   bool disable_touch;
+  bool touch_beep;
 } system_config_t;
 
 // Multi-network WiFi storage — the sole source of truth for credentials.

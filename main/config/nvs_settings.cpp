@@ -29,6 +29,13 @@ constexpr const char* NVS_KEY_SKIP_BOOT = "skip_boot";
 constexpr const char* NVS_KEY_AP_MODE = "ap_mode";
 constexpr const char* NVS_KEY_PREFER_IPV6 = "prefer_ipv6";
 constexpr const char* NVS_KEY_DISABLE_TOUCH = "dis_touch";
+constexpr const char* NVS_KEY_TOUCH_BEEP = "touch_beep";
+
+#ifdef CONFIG_TOUCH_BEEP_DEFAULT
+constexpr bool TOUCH_BEEP_DEFAULT = true;
+#else
+constexpr bool TOUCH_BEEP_DEFAULT = false;
+#endif
 
 // Atomic save keys — blob-based config persistence
 constexpr const char* NVS_KEY_CFG_CUR = "cfg";
@@ -115,6 +122,7 @@ esp_err_t persist_to_nvs() {
   nvs.set_u8(NVS_KEY_AP_MODE, s_config.ap_mode ? 1 : 0);
   nvs.set_u8(NVS_KEY_PREFER_IPV6, s_config.prefer_ipv6 ? 1 : 0);
   nvs.set_u8(NVS_KEY_DISABLE_TOUCH, s_config.disable_touch ? 1 : 0);
+  nvs.set_u8(NVS_KEY_TOUCH_BEEP, s_config.touch_beep ? 1 : 0);
   nvs.commit();
 
   return err;
@@ -230,9 +238,21 @@ esp_err_t nvs_settings_init(void) {
   s_config.prefer_ipv6 = true;
 #endif
 
+  s_config.touch_beep = TOUCH_BEEP_DEFAULT;
+
   // Try atomic blob load first (new format)
   if (load_from_blob()) {
     ESP_LOGI(TAG, "Config loaded from atomic blob");
+
+    // touch_beep sits in what used to be trailing padding of system_config_t,
+    // so a blob saved by older firmware has the same size and loads with an
+    // arbitrary byte there. Its standalone key is only written after a blob
+    // that includes it, so a missing key marks such a blob.
+    NvsHandle nvs(NVS_NAMESPACE, NVS_READONLY);
+    uint8_t val_u8;
+    if (!nvs || nvs.get_u8(NVS_KEY_TOUCH_BEEP, &val_u8) != ESP_OK) {
+      s_config.touch_beep = TOUCH_BEEP_DEFAULT;
+    }
   } else {
     // Fall back to individual key loading (legacy format)
     NvsHandle nvs(NVS_NAMESPACE, NVS_READONLY);
@@ -283,6 +303,9 @@ esp_err_t nvs_settings_init(void) {
 
       if (nvs.get_u8(NVS_KEY_DISABLE_TOUCH, &val_u8) == ESP_OK)
         s_config.disable_touch = (val_u8 != 0);
+
+      if (nvs.get_u8(NVS_KEY_TOUCH_BEEP, &val_u8) == ESP_OK)
+        s_config.touch_beep = (val_u8 != 0);
     }
   }
 

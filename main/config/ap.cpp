@@ -45,12 +45,18 @@ constexpr const char* SWAP_COLORS_FMT =
 #endif
 
 #if BOARD_HAS_TOUCH
-constexpr const char* DISABLE_TOUCH_FMT =
+constexpr const char* TOUCH_SETTINGS_FMT =
     "<div class='form-group'>"
     "<label>"
     "<input type='checkbox' id='disable_touch' name='disable_touch' value='1' "
     "%s>"
     " Disable Touch Button (Gen2 only - requires reboot)"
+    "</label>"
+    "</div>"
+    "<div class='form-group'>"
+    "<label>"
+    "<input type='checkbox' id='touch_beep' name='touch_beep' value='1' %s>"
+    " Beep On Touch (Gen2 only)"
     "</label>"
     "</div>";
 #endif
@@ -254,9 +260,10 @@ esp_err_t root_handler(httpd_req_t* req) {
 
   const char* touch_section = "";
 #if BOARD_HAS_TOUCH
-  char touch_buf[256];
-  snprintf(touch_buf, sizeof(touch_buf), DISABLE_TOUCH_FMT,
-           cfg.disable_touch ? "checked" : "");
+  char touch_buf[512];
+  snprintf(touch_buf, sizeof(touch_buf), TOUCH_SETTINGS_FMT,
+           cfg.disable_touch ? "checked" : "",
+           cfg.touch_beep ? "checked" : "");
   touch_section = touch_buf;
 #endif
 
@@ -411,6 +418,8 @@ esp_err_t save_handler(httpd_req_t* req) {
   bool swap_colors = false;
   char touch_val[4] = {0};
   bool disable_touch = false;
+  char touch_beep_val[4] = {0};
+  bool touch_beep = false;
 
   if (httpd_query_key_value(buf, "ssid", ssid, sizeof(ssid)) != ESP_OK) {
     ESP_LOGD(TAG, "SSID param missing");
@@ -441,6 +450,11 @@ esp_err_t save_handler(httpd_req_t* req) {
     disable_touch = (strcmp(touch_val, "1") == 0);
   }
 
+  if (httpd_query_key_value(buf, "touch_beep", touch_beep_val,
+                            sizeof(touch_beep_val)) == ESP_OK) {
+    touch_beep = (strcmp(touch_beep_val, "1") == 0);
+  }
+
   url_decode(ssid);
   url_decode(password);
   url_decode(image_url);
@@ -462,9 +476,9 @@ esp_err_t save_handler(httpd_req_t* req) {
 
   ESP_LOGI(TAG,
            "Received SSID: %s, Image URL: %s, Swap Colors: %s, Disable Touch: "
-           "%s",
+           "%s, Touch Beep: %s",
            ssid, image_url, swap_colors ? "true" : "false",
-           disable_touch ? "true" : "false");
+           disable_touch ? "true" : "false", touch_beep ? "true" : "false");
 
   {
     auto cfg = config_get();
@@ -483,6 +497,7 @@ esp_err_t save_handler(httpd_req_t* req) {
     snprintf(cfg.api_key, sizeof(cfg.api_key), "%s", api_key);
     cfg.swap_colors = swap_colors;
     cfg.disable_touch = disable_touch;
+    cfg.touch_beep = touch_beep;
     config_set(&cfg);
 
     // Credentials live in the multi-network list (the sole credential store),
