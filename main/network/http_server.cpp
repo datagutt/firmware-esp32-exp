@@ -1,8 +1,11 @@
 #include "http_server.h"
 
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include "event_bus.h"
+#include "raii_utils.hpp"
 
 namespace {
 
@@ -10,6 +13,9 @@ const char *TAG = "http_server";
 
 constexpr int MAX_REGISTRARS = 8;
 
+// Serializes server start against registrar changes: the server is started
+// from the event bus task on WiFi connect while other tasks add registrars.
+SemaphoreHandle_t s_mutex = nullptr;
 httpd_handle_t s_server = nullptr;
 http_handler_registrar_fn s_registrars[MAX_REGISTRARS] = {};
 int s_registrar_count = 0;
@@ -36,10 +42,12 @@ void on_wifi_connected(const tronbyt_event_t*, void*) {
 }  // namespace
 
 void http_server_init(void) {
+  if (!s_mutex) s_mutex = xSemaphoreCreateMutex();
   event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_wifi_connected, nullptr);
 }
 
 void http_server_start(void) {
+  raii::MutexGuard lock(s_mutex);
   if (s_server) {
     ESP_LOGD(TAG, "Server already running");
     return;
@@ -82,6 +90,7 @@ void http_server_start(void) {
 }
 
 void http_server_stop(void) {
+  raii::MutexGuard lock(s_mutex);
   if (!s_server) {
     return;
   }
@@ -93,6 +102,7 @@ void http_server_stop(void) {
 httpd_handle_t http_server_handle(void) { return s_server; }
 
 void http_server_register_handlers(http_handler_registrar_fn registrar) {
+  raii::MutexGuard lock(s_mutex);
   if (s_registrar_count >= MAX_REGISTRARS) {
     ESP_LOGE(TAG, "Too many registrars (max %d)", MAX_REGISTRARS);
     return;

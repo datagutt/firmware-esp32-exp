@@ -104,7 +104,7 @@ void runtime_task(void*) {
 
   // Register the wildcard catch-all AFTER all API and specific routes so
   // that /* does not shadow /api/* handlers (httpd matches by registration
-  // order).  Only ONE wildcard GET handler can exist.  Use the AP
+  // order, and registrars are replayed in the order they were added).  Only ONE wildcard GET handler can exist.  Use the AP
   // captive-portal wildcard during setup (needs redirects to work), and
   // the webui handler for normal operation.
   if (need_setup) {
@@ -131,7 +131,7 @@ void runtime_task(void*) {
   }
 
   if (cfg.ap_mode) {
-    ap_start_shutdown_timer();
+    ap_enable_auto_shutdown();
   }
 
   const char* image_url = nullptr;

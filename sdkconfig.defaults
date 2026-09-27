@@ -39,9 +39,6 @@ CONFIG_ESP_PHY_REDUCE_TX_POWER=y
 # Enable TLS session tickets for faster reconnects.
 CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 
-# Enable 802.11R (Fast Transition) Support.
-CONFIG_ESP_WIFI_11R_SUPPORT=y
-
 # Wifi sleep optimize when beacon lost
 CONFIG_ESP_WIFI_SLP_BEACON_LOST_OPT=y
 

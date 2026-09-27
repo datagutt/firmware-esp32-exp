@@ -185,6 +185,16 @@ esp_err_t static_file_handler(httpd_req_t* req) {
   return ESP_OK;
 }
 
+void register_webui_wildcard(httpd_handle_t server) {
+  const httpd_uri_t webui_uri = {
+      .uri = "/*",
+      .method = HTTP_GET,
+      .handler = static_file_handler,
+      .user_ctx = nullptr,
+  };
+  httpd_register_uri_handler(server, &webui_uri);
+}
+
 }  // namespace
 
 bool webui_fs_mounted(void) { return s_fs_mounted; }
@@ -223,15 +233,5 @@ esp_err_t webui_server_init(void) {
 }
 
 void webui_register_wildcard(void) {
-  httpd_handle_t server = http_server_handle();
-  if (!server) {
-    return;
-  }
-  const httpd_uri_t webui_uri = {
-      .uri = "/*",
-      .method = HTTP_GET,
-      .handler = static_file_handler,
-      .user_ctx = nullptr,
-  };
-  httpd_register_uri_handler(server, &webui_uri);
+  http_server_register_handlers(register_webui_wildcard);
 }

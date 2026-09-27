@@ -578,15 +578,7 @@ esp_err_t ota_upload_handler(httpd_req_t* req) {
   return ESP_OK;
 }
 
-}  // namespace
-
-esp_err_t sta_api_start(void) {
-  httpd_handle_t server = http_server_handle();
-  if (!server) {
-    ESP_LOGE(TAG, "HTTP server not running");
-    return ESP_FAIL;
-  }
-
+void register_api_handlers(httpd_handle_t server) {
   ESP_LOGI(TAG, "Registering API endpoints on central HTTP server");
 
   const httpd_uri_t status_uri = {
@@ -676,6 +668,13 @@ esp_err_t sta_api_start(void) {
       .user_ctx = nullptr,
   };
   httpd_register_uri_handler(server, &ota_upload_uri);
+}
 
+}  // namespace
+
+esp_err_t sta_api_start(void) {
+  // The server may not be running yet (STA not associated, no portal); the
+  // registrar is replayed when it starts.
+  http_server_register_handlers(register_api_handlers);
   return ESP_OK;
 }

@@ -102,7 +102,8 @@ typedef struct {
 void wifi_get_diag_stats(wifi_diag_stats_t* out);
 
 /**
- * @brief Check WiFi health and reconnect if needed
+ * @brief Queue a WiFi health check (reconnect if needed) on the default event
+ *        loop task. Safe to call from any task.
  */
 void wifi_health_check(void);
 

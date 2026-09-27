@@ -1,5 +1,7 @@
 #include "ap.h"
 
+#include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -9,13 +11,19 @@
 #include <esp_netif.h>
 #include <esp_random.h>
 #include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+#include <freertos/timers.h>
 #include <lwip/sockets.h>
 
 #include "board_caps.h"
+#include "event_bus.h"
 #include "http_server.h"
 #include "nvs_settings.h"
 #include "ota_http_upload.h"
 #include "psram_alloc.h"
+#include "raii_utils.hpp"
 #include "sdkconfig.h"
 #include "webp_player.h"
 #include "wifi.h"
@@ -26,11 +34,33 @@ const char* TAG = "AP";
 
 constexpr const char* DEFAULT_AP_SSID = CONFIG_BRAND_NAME_LOWER "-CONFIG";
 
+constexpr uint8_t AP_IP[4] = {10, 10, 0, 1};
+constexpr uint32_t PORTAL_SHUTDOWN_DELAY_MS = 2 * 60 * 1000;
+
 constexpr int DNS_PORT = 53;
 constexpr int DNS_MAX_LEN = 512;
+constexpr int DNS_RECV_TIMEOUT_MS = 500;
+constexpr uint16_t DNS_FLAG_QR = 0x8000;
+constexpr uint16_t DNS_FLAG_AA = 0x0400;
+constexpr uint16_t DNS_FLAG_RD = 0x0100;
+constexpr uint8_t DNS_TYPE_A = 1;
+constexpr uint8_t DNS_CLASS_IN = 1;
 
+// DNS task lifetime. The task owns its socket and clears the handle itself on
+// exit; stopping only raises the flag so the socket is always closed.
+SemaphoreHandle_t s_dns_mutex = nullptr;
 TaskHandle_t s_dns_task_handle = nullptr;
+std::atomic<bool> s_dns_stop_requested{false};
+
+// Portal lifetime. The portal is open while the soft AP and captive DNS run;
+// it closes PORTAL_SHUTDOWN_DELAY_MS after the STA gets an IP (once the setup
+// flow allows it) and reopens when the STA gives up connecting.
+SemaphoreHandle_t s_portal_mutex = nullptr;
 TimerHandle_t s_ap_shutdown_timer = nullptr;
+wifi_config_t s_ap_config = {};
+bool s_portal_configured = false;
+bool s_auto_shutdown_enabled = false;
+std::atomic<bool> s_portal_active{false};
 
 extern const char setup_html_start[] asm("_binary_setup_html_start");
 extern const char success_html_start[] asm("_binary_success_html_start");
@@ -79,9 +109,6 @@ char* build_networks_section();
 esp_err_t update_handler(httpd_req_t* req);
 esp_err_t captive_portal_handler(httpd_req_t* req);
 void url_decode(char* str);
-void start_dns_server();
-void stop_dns_server();
-void ap_shutdown_timer_callback(TimerHandle_t xTimer);
 
 // Escape a string for safe inclusion in an HTML attribute or text node.
 // Writes a NUL-terminated result; truncates safely if out_size is too small.
@@ -152,96 +179,153 @@ char* build_networks_section() {
   return out;
 }
 
-void dns_server_task(void* pvParameters) {
+// Returns the offset just past the first question (QNAME, QTYPE, QCLASS), or
+// -1 if the question is malformed or truncated.
+int dns_question_end(const uint8_t* msg, int len, uint16_t* qtype,
+                     uint16_t* qclass) {
+  int pos = sizeof(DnsHeader);
+  while (pos < len && msg[pos] != 0) {
+    // Compression pointers (0xC0) and extended label types are not valid in
+    // the question of a query.
+    if ((msg[pos] & 0xC0) != 0) return -1;
+    pos += 1 + msg[pos];
+  }
+  pos++;  // root label
+  if (pos + 4 > len) return -1;
+  *qtype = static_cast<uint16_t>((msg[pos] << 8) | msg[pos + 1]);
+  *qclass = static_cast<uint16_t>((msg[pos + 2] << 8) | msg[pos + 3]);
+  return pos + 4;
+}
+
+// Builds the captive-portal reply for `query`: an A record pointing at the AP
+// for A/IN questions, NOERROR with no answers for every other type (AAAA etc.)
+// so clients fall back to IPv4. Only the header and first question are echoed:
+// the rest of the query (typically an EDNS0 OPT record) would otherwise sit in
+// front of the answer. Returns the reply length, or -1 to drop the packet.
+int build_dns_response(const uint8_t* query, int len, uint8_t* resp,
+                       int resp_size) {
+  if (len < static_cast<int>(sizeof(DnsHeader))) return -1;
+  DnsHeader hdr;
+  memcpy(&hdr, query, sizeof(hdr));
+  uint16_t flags = ntohs(hdr.flags);
+  if ((flags & DNS_FLAG_QR) != 0) return -1;
+  if (((flags >> 11) & 0xF) != 0) return -1;  // only standard queries
+  if (ntohs(hdr.qdcount) == 0) return -1;
+
+  uint16_t qtype = 0;
+  uint16_t qclass = 0;
+  int q_end = dns_question_end(query, len, &qtype, &qclass);
+  if (q_end < 0) return -1;
+
+  const uint8_t answer[] = {
+      0xC0, 0x0C,              // name: pointer to the question
+      0x00, DNS_TYPE_A,        // type
+      0x00, DNS_CLASS_IN,      // class
+      0x00, 0x00, 0x00, 0x3C,  // TTL 60 s
+      0x00, 0x04,              // rdlength
+      AP_IP[0], AP_IP[1], AP_IP[2], AP_IP[3]};
+  bool answered = (qtype == DNS_TYPE_A && qclass == DNS_CLASS_IN);
+  int total = q_end + (answered ? static_cast<int>(sizeof(answer)) : 0);
+  if (total > resp_size) return -1;
+
+  memcpy(resp, query, q_end);
+  hdr.flags = htons(DNS_FLAG_QR | DNS_FLAG_AA | (flags & DNS_FLAG_RD));
+  hdr.qdcount = htons(1);
+  hdr.ancount = htons(answered ? 1 : 0);
+  hdr.nscount = 0;
+  hdr.arcount = 0;
+  memcpy(resp, &hdr, sizeof(hdr));
+  if (answered) memcpy(resp + q_end, answer, sizeof(answer));
+  return total;
+}
+
+void dns_server_task(void*) {
   int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (sock < 0) {
     ESP_LOGE(TAG, "Failed to create DNS socket");
-    vTaskDelete(nullptr);
-    return;
+  } else {
+    struct sockaddr_in server_addr = {};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    server_addr.sin_port = htons(DNS_PORT);
+
+    // The receive timeout bounds how long a stop request waits for the loop.
+    struct timeval tv = {};
+    tv.tv_usec = DNS_RECV_TIMEOUT_MS * 1000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    if (bind(sock, reinterpret_cast<struct sockaddr*>(&server_addr),
+             sizeof(server_addr)) < 0) {
+      ESP_LOGE(TAG, "Failed to bind DNS socket: errno %d", errno);
+      close(sock);
+      sock = -1;
+    } else {
+      ESP_LOGI(TAG, "DNS server started on port %d", DNS_PORT);
+    }
   }
 
-  struct sockaddr_in server_addr = {};
-  server_addr.sin_family = AF_INET;
-  server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  server_addr.sin_port = htons(DNS_PORT);
-
-  if (bind(sock, reinterpret_cast<struct sockaddr*>(&server_addr),
-           sizeof(server_addr)) < 0) {
-    ESP_LOGE(TAG, "Failed to bind DNS socket");
-    close(sock);
-    vTaskDelete(nullptr);
-    return;
-  }
-
-  ESP_LOGI(TAG, "DNS server started on port 53");
-
-  char rx_buffer[DNS_MAX_LEN];
-  char tx_buffer[DNS_MAX_LEN];
-  struct sockaddr_in client_addr;
-  socklen_t client_addr_len = sizeof(client_addr);
-
-  while (true) {
-    int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0,
+  uint8_t rx_buffer[DNS_MAX_LEN];
+  uint8_t tx_buffer[DNS_MAX_LEN];
+  while (sock >= 0 && !s_dns_stop_requested.load()) {
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+    int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer), 0,
                        reinterpret_cast<struct sockaddr*>(&client_addr),
                        &client_addr_len);
-
     if (len < 0) {
-      ESP_LOGE(TAG, "DNS recvfrom failed");
+      if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+      ESP_LOGE(TAG, "DNS recvfrom failed: errno %d", errno);
       break;
     }
 
-    if (len < static_cast<int>(sizeof(DnsHeader))) {
-      continue;
+    int resp_len = build_dns_response(rx_buffer, len, tx_buffer,
+                                      sizeof(tx_buffer));
+    if (resp_len > 0) {
+      sendto(sock, tx_buffer, resp_len, 0,
+             reinterpret_cast<struct sockaddr*>(&client_addr),
+             client_addr_len);
     }
-
-    auto* header = reinterpret_cast<DnsHeader*>(rx_buffer);
-
-    if ((ntohs(header->flags) & 0x8000) != 0) {
-      continue;
-    }
-
-    memcpy(tx_buffer, rx_buffer, len);
-    auto* resp_header = reinterpret_cast<DnsHeader*>(tx_buffer);
-
-    resp_header->flags = htons(0x8400);
-
-    int response_len = len;
-    int answers_added = 0;
-
-    uint16_t num_questions = ntohs(header->qdcount);
-    if (num_questions > 0 && response_len + 16 < DNS_MAX_LEN) {
-      uint8_t answer[] = {0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
-                          0x00, 0x3C, 0x00, 0x04, 10,   10,   0,    1};
-
-      memcpy(tx_buffer + response_len, answer, sizeof(answer));
-      response_len += sizeof(answer);
-      answers_added = 1;
-    }
-
-    resp_header->ancount = htons(answers_added);
-
-    sendto(sock, tx_buffer, response_len, 0,
-           reinterpret_cast<struct sockaddr*>(&client_addr), client_addr_len);
   }
 
-  close(sock);
+  // Close before clearing the handle so a restart can bind port 53 again.
+  if (sock >= 0) close(sock);
+  {
+    raii::MutexGuard lock(s_dns_mutex);
+    s_dns_task_handle = nullptr;
+  }
+  ESP_LOGI(TAG, "DNS server stopped");
   vTaskDelete(nullptr);
 }
 
 void start_dns_server() {
-  if (s_dns_task_handle != nullptr) {
-    ESP_LOGW(TAG, "DNS server already running");
-    return;
+  // A previous server may still be draining its receive timeout after a stop.
+  for (int waited_ms = 0; waited_ms <= 2 * DNS_RECV_TIMEOUT_MS;
+       waited_ms += 50) {
+    {
+      raii::MutexGuard lock(s_dns_mutex);
+      if (s_dns_task_handle == nullptr) {
+        s_dns_stop_requested.store(false);
+        if (xTaskCreate(dns_server_task, "dns_server", 4096, nullptr, 5,
+                        &s_dns_task_handle) != pdPASS) {
+          s_dns_task_handle = nullptr;
+          ESP_LOGE(TAG, "Failed to create DNS server task");
+        }
+        return;
+      }
+      if (!s_dns_stop_requested.load()) {
+        ESP_LOGW(TAG, "DNS server already running");
+        return;
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
-  xTaskCreate(dns_server_task, "dns_server", 4096, nullptr, 5,
-              &s_dns_task_handle);
+  ESP_LOGE(TAG, "Previous DNS server did not exit; not restarting it");
 }
 
 void stop_dns_server() {
+  raii::MutexGuard lock(s_dns_mutex);
   if (s_dns_task_handle != nullptr) {
-    vTaskDelete(s_dns_task_handle);
-    s_dns_task_handle = nullptr;
-    ESP_LOGI(TAG, "DNS server stopped");
+    s_dns_stop_requested.store(true);
   }
 }
 
@@ -619,100 +703,171 @@ esp_err_t captive_portal_handler(httpd_req_t* req) {
   return ESP_OK;
 }
 
-void ap_shutdown_timer_callback(TimerHandle_t xTimer) {
+void register_portal_handlers(httpd_handle_t server) {
+  // Serve the setup page at /setup so it is always reachable regardless of
+  // whether the webui wildcard handles /* in normal operation.
+  const httpd_uri_t setup_uri = {.uri = "/setup",
+                                 .method = HTTP_GET,
+                                 .handler = root_handler,
+                                 .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &setup_uri);
+
+  const httpd_uri_t save_uri = {.uri = "/save",
+                                .method = HTTP_POST,
+                                .handler = save_handler,
+                                .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &save_uri);
+
+  const httpd_uri_t network_delete_uri = {.uri = "/network/delete",
+                                          .method = HTTP_POST,
+                                          .handler = network_delete_handler,
+                                          .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &network_delete_uri);
+
+  const httpd_uri_t update_uri = {.uri = "/update",
+                                  .method = HTTP_POST,
+                                  .handler = update_handler,
+                                  .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &update_uri);
+
+  const httpd_uri_t hotspot_detect_uri = {.uri = "/hotspot-detect.html",
+                                          .method = HTTP_GET,
+                                          .handler = captive_portal_handler,
+                                          .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &hotspot_detect_uri);
+
+  const httpd_uri_t generate_204_uri = {.uri = "/generate_204",
+                                        .method = HTTP_GET,
+                                        .handler = captive_portal_handler,
+                                        .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &generate_204_uri);
+
+  const httpd_uri_t ncsi_uri = {.uri = "/ncsi.txt",
+                                .method = HTTP_GET,
+                                .handler = captive_portal_handler,
+                                .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &ncsi_uri);
+}
+
+void register_portal_wildcard(httpd_handle_t server) {
+  const httpd_uri_t wildcard_uri = {.uri = "/*",
+                                    .method = HTTP_GET,
+                                    .handler = captive_portal_handler,
+                                    .user_ctx = nullptr};
+  httpd_register_uri_handler(server, &wildcard_uri);
+}
+
+// Caller holds s_portal_mutex.
+void arm_shutdown_timer_locked() {
+  if (!s_portal_active.load() || !s_auto_shutdown_enabled ||
+      !s_ap_shutdown_timer || xTimerIsTimerActive(s_ap_shutdown_timer)) {
+    return;
+  }
+  if (xTimerReset(s_ap_shutdown_timer, 0) == pdPASS) {
+    ESP_LOGI(TAG, "Config portal will shut down in %lu s",
+             static_cast<unsigned long>(PORTAL_SHUTDOWN_DELAY_MS / 1000));
+  } else {
+    ESP_LOGE(TAG, "Failed to arm config portal shutdown timer");
+  }
+}
+
+void ap_shutdown_timer_callback(TimerHandle_t) {
+  raii::MutexGuard lock(s_portal_mutex);
+  if (!s_portal_active.load()) return;
+  // The disconnect notification may still be queued behind this callback.
+  if (!wifi_is_connected()) {
+    ESP_LOGI(TAG, "WiFi not connected; keeping config portal open");
+    return;
+  }
   ESP_LOGI(TAG, "Shutting down config portal");
-  ap_stop();
+  stop_dns_server();
   esp_wifi_set_mode(WIFI_MODE_STA);
+  s_portal_active.store(false);
+}
+
+void on_sta_connected(const tronbyt_event_t*, void*) {
+  raii::MutexGuard lock(s_portal_mutex);
+  arm_shutdown_timer_locked();
+}
+
+void on_sta_disconnected(const tronbyt_event_t*, void*) {
+  raii::MutexGuard lock(s_portal_mutex);
+  if (s_ap_shutdown_timer && xTimerIsTimerActive(s_ap_shutdown_timer)) {
+    xTimerStop(s_ap_shutdown_timer, 0);
+    ESP_LOGI(TAG, "WiFi lost; config portal stays open");
+  }
 }
 
 }  // namespace
 
 esp_err_t ap_start(void) {
+  http_server_register_handlers(register_portal_handlers);
   http_server_start();
-
-  httpd_handle_t server = http_server_handle();
-  if (!server) {
+  if (!http_server_handle()) {
     ESP_LOGE(TAG, "Failed to get HTTP server handle");
     return ESP_FAIL;
   }
-
-  // Serve the setup page at /setup so it is always reachable regardless of
-  // whether the webui wildcard handles /* in normal operation.
-  httpd_uri_t setup_uri = {.uri = "/setup",
-                            .method = HTTP_GET,
-                            .handler = root_handler,
-                            .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &setup_uri);
-
-  httpd_uri_t save_uri = {.uri = "/save",
-                          .method = HTTP_POST,
-                          .handler = save_handler,
-                          .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &save_uri);
-
-  httpd_uri_t network_delete_uri = {.uri = "/network/delete",
-                                    .method = HTTP_POST,
-                                    .handler = network_delete_handler,
-                                    .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &network_delete_uri);
-
-  httpd_uri_t update_uri = {.uri = "/update",
-                            .method = HTTP_POST,
-                            .handler = update_handler,
-                            .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &update_uri);
-
-  httpd_uri_t hotspot_detect_uri = {.uri = "/hotspot-detect.html",
-                                    .method = HTTP_GET,
-                                    .handler = captive_portal_handler,
-                                    .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &hotspot_detect_uri);
-
-  httpd_uri_t generate_204_uri = {.uri = "/generate_204",
-                                  .method = HTTP_GET,
-                                  .handler = captive_portal_handler,
-                                  .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &generate_204_uri);
-
-  httpd_uri_t ncsi_uri = {.uri = "/ncsi.txt",
-                          .method = HTTP_GET,
-                          .handler = captive_portal_handler,
-                          .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &ncsi_uri);
 
   // NOTE: The wildcard catch-all is NOT registered here. Call
   // ap_register_wildcard() after all other handlers (e.g. STA API)
   // have been registered, because httpd_find_uri_handler() returns
   // the first array-order match and we need /api/* to win over /*.
 
+  raii::MutexGuard lock(s_portal_mutex);
+  if (!s_ap_shutdown_timer) {
+    s_ap_shutdown_timer = xTimerCreate(
+        "ap_shutdown_timer", pdMS_TO_TICKS(PORTAL_SHUTDOWN_DELAY_MS), pdFALSE,
+        nullptr, ap_shutdown_timer_callback);
+    if (!s_ap_shutdown_timer) {
+      ESP_LOGE(TAG, "Failed to create AP shutdown timer");
+    }
+    event_bus_subscribe(TRONBYT_EVENT_WIFI_CONNECTED, on_sta_connected,
+                        nullptr);
+    event_bus_subscribe(TRONBYT_EVENT_WIFI_DISCONNECTED, on_sta_disconnected,
+                        nullptr);
+  }
   start_dns_server();
+  s_portal_active.store(true);
 
   return ESP_OK;
 }
 
 void ap_register_wildcard(void) {
-  httpd_handle_t server = http_server_handle();
-  if (!server) {
-    return;
-  }
-  httpd_uri_t wildcard_uri = {.uri = "/*",
-                              .method = HTTP_GET,
-                              .handler = captive_portal_handler,
-                              .user_ctx = nullptr};
-  httpd_register_uri_handler(server, &wildcard_uri);
+  http_server_register_handlers(register_portal_wildcard);
 }
 
 esp_err_t ap_stop(void) {
+  raii::MutexGuard lock(s_portal_mutex);
+  if (s_ap_shutdown_timer) xTimerStop(s_ap_shutdown_timer, 0);
   stop_dns_server();
+  s_portal_active.store(false);
   return ESP_OK;
 }
+
+void ap_open_portal(void) {
+  raii::MutexGuard lock(s_portal_mutex);
+  if (!s_portal_configured || s_portal_active.load()) return;
+
+  esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+  if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &s_ap_config);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to reopen config portal: %s", esp_err_to_name(err));
+    return;
+  }
+  start_dns_server();
+  s_portal_active.store(true);
+  ESP_LOGW(TAG, "Config portal reopened: join '%s' to reconfigure WiFi",
+           DEFAULT_AP_SSID);
+}
+
+bool ap_portal_active(void) { return s_portal_active.load(); }
 
 void ap_init_netif(void) {
   esp_netif_t* ap_netif = esp_netif_create_default_wifi_ap();
 
   esp_netif_ip_info_t ip_info;
-  IP4_ADDR(&ip_info.ip, 10, 10, 0, 1);
-  IP4_ADDR(&ip_info.gw, 10, 10, 0, 1);
+  IP4_ADDR(&ip_info.ip, AP_IP[0], AP_IP[1], AP_IP[2], AP_IP[3]);
+  IP4_ADDR(&ip_info.gw, AP_IP[0], AP_IP[1], AP_IP[2], AP_IP[3]);
   IP4_ADDR(&ip_info.netmask, 255, 255, 255, 0);
 
   esp_netif_dhcps_stop(ap_netif);
@@ -721,53 +876,42 @@ void ap_init_netif(void) {
   if (ap_err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to set AP IP info: %s", esp_err_to_name(ap_err));
   } else {
-    ESP_LOGI(TAG, "AP IP address set to 10.10.0.1");
+    ESP_LOGI(TAG, "AP IP address set to " IPSTR, IP2STR(&ip_info.ip));
   }
 
   esp_netif_dhcps_start(ap_netif);
 }
 
 void ap_configure(void) {
+  if (!s_portal_mutex) s_portal_mutex = xSemaphoreCreateMutex();
+  if (!s_dns_mutex) s_dns_mutex = xSemaphoreCreateMutex();
+
   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
 
-  wifi_config_t ap_config = {};
-  strcpy(reinterpret_cast<char*>(ap_config.ap.ssid), DEFAULT_AP_SSID);
-  ap_config.ap.ssid_len = strlen(DEFAULT_AP_SSID);
+  s_ap_config = {};
+  strcpy(reinterpret_cast<char*>(s_ap_config.ap.ssid), DEFAULT_AP_SSID);
+  s_ap_config.ap.ssid_len = strlen(DEFAULT_AP_SSID);
 
   uint8_t random_channel = (esp_random() % 11) + 1;
-  ap_config.ap.channel = random_channel;
+  s_ap_config.ap.channel = random_channel;
 
-  ap_config.ap.max_connection = 4;
-  ap_config.ap.authmode = WIFI_AUTH_OPEN;
-  ap_config.ap.beacon_interval = 100;
+  s_ap_config.ap.max_connection = 4;
+  s_ap_config.ap.authmode = WIFI_AUTH_OPEN;
+  s_ap_config.ap.beacon_interval = 100;
 
   ESP_LOGI(TAG, "Setting AP SSID: %s on channel %d", DEFAULT_AP_SSID,
            random_channel);
-  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &s_ap_config));
+  s_portal_configured = true;
 }
 
-void ap_start_shutdown_timer(void) {
-  if (s_ap_shutdown_timer) {
-    xTimerDelete(s_ap_shutdown_timer, 0);
-    s_ap_shutdown_timer = nullptr;
-  }
-
-  s_ap_shutdown_timer =
-      xTimerCreate("ap_shutdown_timer",
-                   pdMS_TO_TICKS(2 * 60 * 1000),  // 2 minutes
-                   pdFALSE,                        // One-shot timer
-                   nullptr,                        // No timer ID
-                   ap_shutdown_timer_callback);
-
-  if (s_ap_shutdown_timer) {
-    if (xTimerStart(s_ap_shutdown_timer, 0) == pdPASS) {
-      ESP_LOGI(TAG, "AP will automatically shut down in 2 minutes");
-    } else {
-      ESP_LOGE(TAG, "Failed to start AP shutdown timer");
-      xTimerDelete(s_ap_shutdown_timer, 0);
-      s_ap_shutdown_timer = nullptr;
-    }
+void ap_enable_auto_shutdown(void) {
+  raii::MutexGuard lock(s_portal_mutex);
+  s_auto_shutdown_enabled = true;
+  if (!s_portal_active.load()) return;
+  if (wifi_is_connected()) {
+    arm_shutdown_timer_locked();
   } else {
-    ESP_LOGE(TAG, "Failed to create AP shutdown timer");
+    ESP_LOGI(TAG, "Config portal stays open until WiFi connects");
   }
 }

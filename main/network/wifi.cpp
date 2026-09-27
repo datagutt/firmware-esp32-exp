@@ -43,11 +43,32 @@ constexpr EventBits_t WIFI_FAIL_BIT = BIT1;
 constexpr EventBits_t WIFI_CONNECTED_IPV6_BIT = BIT2;
 
 constexpr int MAX_RECONNECT_ATTEMPTS = 10;
+// Consecutive credential rejections before a network is treated as having a
+// wrong password. One is tolerated because a weak link can also time out the
+// 4-way handshake.
+constexpr int AUTH_FAILURES_BEFORE_GIVING_UP = 2;
+constexpr int HEALTH_REBOOT_THRESHOLD = 10;
+// While a phone is on the portal, STA scans hop channels and break its link,
+// so health-check retries are deferred, but only this many times in a row so
+// a device left associated cannot keep the STA offline forever.
+constexpr uint32_t MAX_DEFERRED_HEALTH_RETRIES = 10;
+
+// Timer callbacks run on the esp_timer task; they only post these events so
+// that all connection state below is owned by the default event loop task.
+ESP_EVENT_DEFINE_BASE(WIFI_MGR_EVENT);
+enum : int32_t {
+  WIFI_MGR_EVENT_HEALTH_CHECK,
+  WIFI_MGR_EVENT_RECONNECT,
+};
 
 EventGroupHandle_t s_wifi_event_group = nullptr;
 esp_netif_t* s_sta_netif = nullptr;
 int s_reconnect_attempts = 0;
 bool s_connection_given_up = false;
+bool s_connect_in_flight = false;
+int s_auth_fail_streak = 0;
+int s_ap_client_count = 0;
+uint32_t s_deferred_health_retries = 0;
 int s_wifi_disconnect_counter = 0;
 uint32_t s_disconnect_events = 0;
 uint32_t s_disconnect_streak = 0;
@@ -61,7 +82,9 @@ void health_timer_callback(void*) { wifi_health_check(); }
 esp_timer_handle_t s_reconnect_timer = nullptr;
 constexpr uint32_t RECONNECT_BASE_MS = 1000;
 constexpr uint32_t RECONNECT_MAX_MS = 60000;
-void reconnect_timer_cb(void*) { esp_wifi_connect(); }
+void reconnect_timer_cb(void*) {
+  esp_event_post(WIFI_MGR_EVENT, WIFI_MGR_EVENT_RECONNECT, nullptr, 0, 0);
+}
 
 // --- Multi-network state ---------------------------------------------------
 // Only engaged when 2+ networks are stored. With 0 or 1 stored networks the
@@ -85,6 +108,23 @@ uint32_t reconnect_delay_us_for(int attempt) {
   return jittered * 1000u;  // ms -> us
 }
 
+// Start a connection attempt with the currently-configured credential. The
+// flag is raised before the call so a disconnect event for this attempt can
+// never be processed ahead of it.
+void start_connect() {
+  s_connect_in_flight = true;
+  esp_err_t err = esp_wifi_connect();
+  if (err != ESP_OK) {
+    s_connect_in_flight = false;
+    ESP_LOGW(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(err));
+  }
+}
+
+bool reconnect_pending() {
+  return s_connect_in_flight ||
+         (s_reconnect_timer && esp_timer_is_active(s_reconnect_timer));
+}
+
 // Schedule a reconnect of the currently-configured credential after a jittered
 // backoff (or connect immediately if the timer is unavailable).
 void schedule_reconnect(int attempt) {
@@ -94,8 +134,32 @@ void schedule_reconnect(int attempt) {
     esp_timer_stop(s_reconnect_timer);  // cancel any pending attempt
     esp_timer_start_once(s_reconnect_timer, delay_us);
   } else {
-    esp_wifi_connect();
+    start_connect();
   }
+}
+
+// Reasons the AP gives when it rejects our credentials, as opposed to the AP
+// being out of range or dropping us.
+bool is_auth_failure(uint8_t reason) {
+  switch (reason) {
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_802_1X_AUTH_FAILED:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Stop the reconnect cycle and hand over to the config portal. The health
+// check keeps retrying in the background.
+void give_up_connection(uint8_t reason) {
+  s_connection_given_up = true;
+  if (s_reconnect_timer) esp_timer_stop(s_reconnect_timer);
+  diag_event_log("WARN", "wifi_given_up", reason,
+                 "WiFi connection given up, opening config portal");
+  ap_open_portal();
 }
 
 // Apply candidate `idx`'s credentials and start connecting. Resets the per-net
@@ -105,6 +169,7 @@ void connect_to_candidate(int idx) {
   if (idx < 0 || idx >= s_candidate_count) return;
   s_candidate_idx = idx;
   s_per_net_attempts = 0;
+  s_auth_fail_streak = 0;
 
   wifi_config_t sta = {};
   memcpy(sta.sta.ssid, s_candidates[idx].ssid, sizeof(sta.sta.ssid));
@@ -119,7 +184,7 @@ void connect_to_candidate(int idx) {
   }
   ESP_LOGI(TAG, "Connecting to candidate %d/%d: %s", idx + 1, s_candidate_count,
            s_candidates[idx].ssid);
-  esp_wifi_connect();
+  start_connect();
 }
 
 // Build the ranked candidate list for this connection cycle. Every stored
@@ -192,6 +257,8 @@ int build_candidates() {
 void handle_successful_ip_acquisition() {
   s_reconnect_attempts = 0;
   s_per_net_attempts = 0;
+  s_auth_fail_streak = 0;
+  s_connect_in_flight = false;
   if (s_reconnect_timer) esp_timer_stop(s_reconnect_timer);
   s_connection_given_up = false;
   xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
@@ -209,18 +276,79 @@ void handle_successful_ip_acquisition() {
   app_state_set_connectivity(CONNECTIVITY_CONNECTED);
 }
 
+void run_health_check() {
+  if (wifi_is_connected()) {
+    s_wifi_disconnect_counter = 0;
+    s_deferred_health_retries = 0;
+    return;
+  }
+
+  s_wifi_disconnect_counter++;
+  s_health_disconnect_checks++;
+  ESP_LOGW(TAG, "WiFi Health check. Disconnect count: %d",
+           s_wifi_disconnect_counter);
+
+  if (wifi_network_list_count() == 0) {
+    // Nothing to connect to; rebooting cannot help and would only drop the
+    // portal from under a user who is setting the device up.
+    ESP_LOGW(TAG, "No networks configured, cannot reconnect");
+    return;
+  }
+
+  if (ap_portal_active()) {
+    ESP_LOGI(TAG, "Config portal open; not rebooting");
+  } else if (s_wifi_disconnect_counter >= HEALTH_REBOOT_THRESHOLD) {
+    ESP_LOGE(TAG, "WiFi disconnect count reached %d - rebooting",
+             s_wifi_disconnect_counter);
+    diag_event_log("ERROR", "wifi_health_reboot", s_wifi_disconnect_counter,
+                   "WiFi health check forced reboot");
+    esp_restart();
+  }
+
+  // The disconnect handler's backoff owns reconnects while it is running; the
+  // health check only restarts the cycle once it has stopped (gave up, or a
+  // connect call failed without producing a disconnect event).
+  if (reconnect_pending()) return;
+
+  if (s_ap_client_count > 0 &&
+      s_deferred_health_retries < MAX_DEFERRED_HEALTH_RETRIES) {
+    s_deferred_health_retries++;
+    ESP_LOGI(TAG, "Portal client connected; deferring reconnect");
+    return;
+  }
+  s_deferred_health_retries = 0;
+
+  ESP_LOGI(TAG, "Reconnecting in Health check...");
+  if (s_connection_given_up && s_candidate_count > 1) {
+    connect_to_candidate((s_candidate_idx + 1) % s_candidate_count);
+  } else {
+    start_connect();
+  }
+}
+
 void wifi_event_handler(void* arg, esp_event_base_t event_base,
                         int32_t event_id, void* event_data) {
-  if (event_base == WIFI_EVENT) {
+  if (event_base == WIFI_MGR_EVENT) {
+    switch (event_id) {
+      case WIFI_MGR_EVENT_HEALTH_CHECK:
+        run_health_check();
+        break;
+      case WIFI_MGR_EVENT_RECONNECT:
+        start_connect();
+        break;
+      default:
+        break;
+    }
+  } else if (event_base == WIFI_EVENT) {
     switch (event_id) {
       case WIFI_EVENT_STA_START:
-        s_reconnect_attempts = 0;
-        s_connection_given_up = false;
         // The first connect is driven explicitly from wifi_initialize after
         // candidate ranking; reconnects are driven by the disconnect handler
         // and the reconnect/health timers. So no esp_wifi_connect() here.
         break;
       case WIFI_EVENT_STA_CONNECTED:
+        // Associated; if DHCP then stalls, the health check may retry.
+        s_connect_in_flight = false;
         // Only create an IPv6 link-local when the user has opted in.
         // Sending an RS triggers an RA containing RDNSS IPv6 addresses;
         // ESP-IDF stores those in dns[0], overwriting the DHCP IPv4 DNS
@@ -231,6 +359,10 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
         }
         break;
       case WIFI_EVENT_STA_DISCONNECTED: {
+        auto* event =
+            static_cast<wifi_event_sta_disconnected_t*>(event_data);
+        uint8_t reason = event->reason;
+        s_connect_in_flight = false;
         s_reconnect_attempts++;
         s_disconnect_events++;
         xEventGroupClearBits(s_wifi_event_group,
@@ -246,8 +378,19 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
         }
         s_disconnect_streak++;
 
-        diag_event_log("WARN", "wifi_disconnect", s_reconnect_attempts,
-                       "Station disconnected");
+        bool auth_failure = is_auth_failure(reason);
+        s_auth_fail_streak = auth_failure ? s_auth_fail_streak + 1 : 0;
+        bool bad_credentials =
+            s_auth_fail_streak >= AUTH_FAILURES_BEFORE_GIVING_UP;
+
+        ESP_LOGW(TAG, "Disconnected from '%.*s' (reason %u%s, rssi %d)",
+                 event->ssid_len, reinterpret_cast<const char*>(event->ssid),
+                 reason, auth_failure ? ", credentials rejected" : "",
+                 event->rssi);
+        char diag_msg[64];
+        snprintf(diag_msg, sizeof(diag_msg),
+                 "Station disconnected (attempt %d)", s_reconnect_attempts);
+        diag_event_log("WARN", "wifi_disconnect", reason, diag_msg);
         if (s_disconnect_streak >= 5) {
           diag_event_log("ERROR", "wifi_disconnect_storm",
                          static_cast<int32_t>(s_disconnect_streak),
@@ -255,11 +398,17 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
         }
 
         if (s_connection_given_up) {
-          // Already gave up this cycle; wait for the portal or a reboot.
+          // Already gave up this cycle; the health check owns retries now.
         } else if (s_candidate_count > 1) {
           // Multi-network: retry the current candidate a few times, then fail
-          // over to the next ranked network.
+          // over to the next ranked network. Rejected credentials will not
+          // start working on a retry, so fail over straight away.
           s_per_net_attempts++;
+          if (bad_credentials) {
+            ESP_LOGW(TAG, "'%s' rejected the stored password",
+                     s_candidates[s_candidate_idx].ssid);
+            s_per_net_attempts = MAX_ATTEMPTS_PER_NET;
+          }
           if (s_per_net_attempts < MAX_ATTEMPTS_PER_NET) {
             ESP_LOGI(TAG, "Reconnect '%s' (try %d/%d)",
                      s_candidates[s_candidate_idx].ssid, s_per_net_attempts,
@@ -273,7 +422,7 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
           } else if (config_get().ap_mode) {
             ESP_LOGW(TAG, "All %d networks exhausted, raising portal",
                      s_candidate_count);
-            s_connection_given_up = true;
+            give_up_connection(reason);
           } else {
             // No portal fallback: restart the cycle from the strongest network.
             // Each attempt blocks on a real connect timeout, so this is not a
@@ -282,11 +431,14 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
                      s_candidate_count);
             connect_to_candidate(0);
           }
+        } else if (config_get().ap_mode && bad_credentials) {
+          ESP_LOGW(TAG, "Stored password rejected, raising portal");
+          give_up_connection(reason);
         } else if (config_get().ap_mode &&
                    s_reconnect_attempts >= MAX_RECONNECT_ATTEMPTS) {
           ESP_LOGW(TAG, "Maximum reconnection attempts (%d) reached, giving up",
                    MAX_RECONNECT_ATTEMPTS);
-          s_connection_given_up = true;
+          give_up_connection(reason);
         } else {
           // Single network (or none ranked yet): original backoff behaviour.
           ESP_LOGI(TAG, "WiFi disconnected (attempt %d)", s_reconnect_attempts);
@@ -297,11 +449,13 @@ void wifi_event_handler(void* arg, esp_event_base_t event_base,
       case WIFI_EVENT_AP_STACONNECTED: {
         auto* event =
             static_cast<wifi_event_ap_staconnected_t*>(event_data);
+        s_ap_client_count++;
         ESP_LOGI(TAG, "Station joined, AID=%d", event->aid);
       } break;
       case WIFI_EVENT_AP_STADISCONNECTED: {
         auto* event =
             static_cast<wifi_event_ap_stadisconnected_t*>(event_data);
+        if (s_ap_client_count > 0) s_ap_client_count--;
         ESP_LOGI(TAG, "Station left, AID=%d", event->aid);
       } break;
       default:
@@ -359,6 +513,9 @@ int wifi_initialize(const char* ssid, const char* password) {
 
   wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
   ESP_ERROR_CHECK(esp_wifi_init(&wifi_cfg));
+  // Credentials live in our own network list and every config is reapplied at
+  // boot, so keep the driver from writing each failover or AP channel to flash.
+  ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
 
   char hostname[MAX_HOSTNAME_LEN + 1];
   snprintf(hostname, sizeof(hostname), "%s", settings.hostname);
@@ -378,6 +535,8 @@ int wifi_initialize(const char* ssid, const char* password) {
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                              &wifi_event_handler, nullptr));
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_GOT_IP6,
+                                             &wifi_event_handler, nullptr));
+  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_MGR_EVENT, ESP_EVENT_ANY_ID,
                                              &wifi_event_handler, nullptr));
 
   bool has_credentials = (wifi_network_list_count() > 0);
@@ -421,7 +580,6 @@ int wifi_initialize(const char* ssid, const char* password) {
           TAG,
           "No valid WiFi credentials available and AP mode is disabled");
     }
-    s_reconnect_attempts = MAX_RECONNECT_ATTEMPTS;
     s_connection_given_up = true;
   }
 
@@ -464,6 +622,8 @@ void wifi_shutdown(void) {
   esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                &wifi_event_handler);
   esp_event_handler_unregister(IP_EVENT, IP_EVENT_GOT_IP6,
+                               &wifi_event_handler);
+  esp_event_handler_unregister(WIFI_MGR_EVENT, ESP_EVENT_ANY_ID,
                                &wifi_event_handler);
 
   if (s_wifi_event_group) {
@@ -597,38 +757,7 @@ bool wifi_wait_for_ipv6(uint32_t timeout_ms) {
 }
 
 void wifi_health_check(void) {
-  if (wifi_is_connected()) {
-    if (s_wifi_disconnect_counter > 0) {
-      s_wifi_disconnect_counter = 0;
-    }
-    s_connection_given_up = false;
-    s_reconnect_attempts = 0;
-    return;
-  }
-
-  s_wifi_disconnect_counter++;
-  s_health_disconnect_checks++;
-  ESP_LOGW(TAG, "WiFi Health check. Disconnect count: %d",
-           s_wifi_disconnect_counter);
-
-  if (s_wifi_disconnect_counter >= 10) {
-    ESP_LOGE(TAG, "WiFi disconnect count reached %d - rebooting",
-             s_wifi_disconnect_counter);
-    diag_event_log("ERROR", "wifi_health_reboot", s_wifi_disconnect_counter,
-                   "WiFi health check forced reboot");
-    esp_restart();
-  }
-
-  if (wifi_network_list_count() > 0) {
-    ESP_LOGI(TAG, "Reconnecting in Health check...");
-    esp_err_t err = esp_wifi_connect();
-    if (err != ESP_OK) {
-      ESP_LOGW(TAG, "WiFi reconnect attempt failed: %s",
-               esp_err_to_name(err));
-    }
-  } else {
-    ESP_LOGW(TAG, "No networks configured, cannot reconnect");
-  }
+  esp_event_post(WIFI_MGR_EVENT, WIFI_MGR_EVENT_HEALTH_CHECK, nullptr, 0, 0);
 }
 
 void wifi_get_diag_stats(wifi_diag_stats_t* out) {
