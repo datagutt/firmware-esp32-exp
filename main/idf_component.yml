@@ -10,10 +10,10 @@ dependencies:
   esp-hub75:
     git: https://github.com/datagutt/esp-hub75.git
     # Pinned commit for reproducible builds; bump when the fork advances.
-    # 0868f29: ESP32 I2S clock derived from the real 160 MHz source (requested
-    # speeds are now the actual output clock), on top of 2265525 runtime bit
-    # depth, set_config() and DMA engine cleanup on begin() failure.
-    version: 0868f293cc99d2fb754f8378f0b528f7798e8d7e
+    # 4e31ce3: ESP32-S3 framebuffers in PSRAM, streamed to the panel through
+    # small internal bounce buffers refilled from an IRAM ISR, on top of
+    # 0868f29 (ESP32 I2S clock derived from the real 160 MHz source).
+    version: 4e31ce35a737146260daf8955ccd1a59cd29d268
     path: components/hub75
   espressif/cjson: "^1.7.19"
   espressif/mdns: "^1.13.1"

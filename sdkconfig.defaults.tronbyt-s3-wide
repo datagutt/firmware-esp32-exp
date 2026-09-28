@@ -11,6 +11,13 @@ CONFIG_HUB75_MIN_REFRESH_RATE=120
 CONFIG_HUB75_GPIO_DRIVE_STRENGTH=1
 CONFIG_HUB75_PANEL_WIDTH=128
 CONFIG_HUB75_PANEL_HEIGHT=64
+# The 128x64 double buffer is 128 KiB; in internal RAM it leaves too little
+# for TLS and task stacks. The framebuffers live in PSRAM and the DMA reads
+# only a small internal bounce ring that an IRAM ISR refills. Running code and
+# rodata from PSRAM keeps the cache enabled during flash writes, so the refill
+# ISR keeps up during OTA and NVS writes instead of the panel stalling.
+CONFIG_HUB75_EXTERNAL_FRAMEBUFFERS=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 CONFIG_HTTP_BUFFER_SIZE_MAX=600000
 CONFIG_DISPLAY_FRAME_SYNC=y
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

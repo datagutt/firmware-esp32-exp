@@ -1,6 +1,6 @@
 dependencies:
   esp-hub75:
-    component_hash: 56c8689101e3ace28044f9b4dfa9d7403cbd6158e41ad45605404c5bfdf933d8
+    component_hash: c3a02ebc5f4899ed63444fe15fa62e8b7991956676eba344c623e5769fdc988b
     dependencies:
     - name: idf
       version: '>=4.4.0'
@@ -14,7 +14,7 @@ dependencies:
     - esp32s3
     - esp32c6
     - esp32p4
-    version: 0868f293cc99d2fb754f8378f0b528f7798e8d7e
+    version: 4e31ce35a737146260daf8955ccd1a59cd29d268
   esp_websocket_client:
     component_hash: d0dd36f156cb69c846b455237bcab20ef8410564de37fd03f4c7ca411ee8a894
     dependencies:
@@ -75,6 +75,6 @@ direct_dependencies:
 - idf
 - joltwallet/littlefs
 - libwebp
-manifest_hash: 48360002ae24e13d434876885c1d9009b92a8027cef348096dafb402aee76d37
+manifest_hash: 066fedb201e52053fea2ef3af4beafc38aeb5dc318ab0420b3ef26fa6a7c7b2a
 target: esp32
 version: 3.0.0
