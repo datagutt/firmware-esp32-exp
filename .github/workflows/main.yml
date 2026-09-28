@@ -57,9 +57,36 @@ jobs:
           # The component manager only re-solves when dependencies.lock no longer
           # matches the idf_component.yml manifests. Builds must use the committed lock.
           if grep -q "solving dependencies" reconfigure.log; then
-            echo "::error::dependencies.lock is out of date. Build any board locally and commit the updated lock."
+            echo "::error::dependencies.lock is out of date. Run idf.py update-dependencies and commit the updated lock."
             exit 1
           fi
+          # A changed git pin does not trigger a re-solve on its own, so compare
+          # every git dependency's pinned version with the one in the lock.
+          python - <<'EOF'
+          import re, subprocess, sys, yaml
+          lock = yaml.safe_load(open("dependencies.lock"))["dependencies"]
+          stale = []
+
+          def pinned_shas(url, version):
+              if re.fullmatch(r"[0-9a-f]{40}", version):
+                  return {version}
+              # A tag: the lock records the tag object (or the commit for a
+              # lightweight tag), so accept both.
+              out = subprocess.run(["git", "ls-remote", url, f"refs/tags/{version}",
+                                    f"refs/tags/{version}^{{}}"],
+                                   capture_output=True, text=True, check=True).stdout
+              return {line.split()[0] for line in out.splitlines()}
+
+          for manifest in ("main/idf_component.yml", "components/webp_decoder/idf_component.yml"):
+              for name, spec in (yaml.safe_load(open(manifest)).get("dependencies") or {}).items():
+                  if isinstance(spec, dict) and "git" in spec and "version" in spec:
+                      locked = lock.get(name, {}).get("version")
+                      if locked not in pinned_shas(spec["git"], spec["version"]):
+                          stale.append(f"{name}: manifest {spec['version']}, lock {locked}")
+          if stale:
+              print("::error::dependencies.lock pins other git versions than the manifests: " + "; ".join(stale))
+              sys.exit(1)
+          EOF
 
       - name: Host Tests
         run: bash test/host/run_tests.sh

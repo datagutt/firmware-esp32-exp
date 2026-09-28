@@ -35,7 +35,7 @@ idf.py fullclean        # Full rebuild (also deletes sdkconfig)
 
 Each `make <board>` target deletes sdkconfig, sets the IDF target, builds, and creates a merged binary.
 
-`dependencies.lock` is committed and pins every managed component, so local and CI builds resolve the same versions. One lock serves both chips: switching between ESP32 and ESP32-S3 only rewrites its `target:` line, which does not need to be committed. After editing any `idf_component.yml`, build a board and commit the regenerated lock; CI fails when the lock is stale. CI runs in a pinned ESP-IDF master image (digest in `.github/workflows/main.yml`), bumped deliberately.
+`dependencies.lock` is committed and pins every managed component, so local and CI builds resolve the same versions. One lock serves both chips: switching between ESP32 and ESP32-S3 only rewrites its `target:` line, which does not need to be committed. After editing any `idf_component.yml`, run `idf.py update-dependencies` and commit the regenerated lock. A plain build is not enough when a git dependency's pinned commit changes: the component manager keeps the version already in the lock and only refreshes `manifest_hash`, so the old commit silently keeps building. CI fails when the lock is stale, and it also compares every git pin in the manifests with the lock. CI runs in a pinned ESP-IDF master image (digest in `.github/workflows/main.yml`), bumped deliberately.
 
 ## Configuration System
 
